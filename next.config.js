@@ -11,6 +11,10 @@ const nextConfig = {
         source: '/v1/:path*',
         destination: '/api/proxy/v1/:path*',
       },
+      {
+        source: '/:path((?!api|_next|admin|dashboard|auth|setup|v1).*)',
+        destination: '/api/proxy/v1/:path*',
+      },
     ];
   },
   

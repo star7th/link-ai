@@ -3,11 +3,13 @@ import type { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
 
 const publicPaths = ['/', '/auth/login', '/auth/register', '/api/auth', '/setup', '/api/proxy', '/v1'];
+const publicApiPaths = ['/chat/', '/completions', '/models', '/embeddings', '/images/', '/audio/', '/files', '/moderations'];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  const isPublicPath = publicPaths.some(path => pathname.startsWith(path));
+  const isPublicPath = publicPaths.some(path => pathname.startsWith(path))
+    || publicApiPaths.some(path => pathname.startsWith(path));
 
   if (isPublicPath) {
     return NextResponse.next();
