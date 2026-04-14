@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
   if (authError) return authError;
 
   const body = await request.json();
-  const { name, code, protocolType, apiBaseUrl, apiKey, defaultModels, totalRpmLimit, totalTpmLimit } = body;
+  const { name, code, protocolType, apiBaseUrl, apiKey, totalRpmLimit, totalTpmLimit } = body;
 
   if (!name || !code || !protocolType || !apiBaseUrl || !apiKey) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -67,7 +67,6 @@ export async function POST(request: NextRequest) {
         protocolType,
         apiBaseUrl,
         apiKeyEncrypted,
-        defaultModels: defaultModels ? JSON.stringify(defaultModels) : null,
         totalRpmLimit,
         totalTpmLimit
       }

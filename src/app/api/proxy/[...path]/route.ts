@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma, proxyEngine, hashToken, rateLimiter, quotaEngine, auditLogger, circuitBreaker, alertEngine } from '@/lib/engines';
 import { desensitizeEngine } from '@/lib/desensitize/engine';
-import { createStreamProxy, extractStreamUsage } from '@/lib/proxy/stream';
+import { createStreamProxy, extractStreamUsage, extractReadableText } from '@/lib/proxy/stream';
 import { setupProviderConfigs } from '@/lib/proxy/engine';
 import { decrypt } from '@/lib/crypto';
 import { isAuditLogFullBodyEnabled } from '@/lib/system-config';
@@ -333,6 +333,7 @@ async function handleRequest(
 
   let body: any = null;
   const contentType = request.headers.get('content-type') || '';
+  const desensitizeHitResults: Array<{ ruleName: string; action: string; matchCount: number }> = [];
 
   if (contentType.includes('application/json')) {
     try {
@@ -392,28 +393,22 @@ async function handleRequest(
       auditLogger.log({
         tokenId: token.id,
         userId: token.userId,
-        logType: 'desensitize_hit',
+        logType: 'request',
         action: path,
         requestMethod: method,
         ipAddress: clientIp,
         userAgent,
         responseStatus: 403,
-        detail: JSON.stringify({ hits: allHits })
+        responseTime: Date.now() - startTime,
+        detail: JSON.stringify({ reason: 'Blocked by desensitization rules' }),
+        requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+        desensitizeHits: JSON.stringify(allHits),
       });
       return NextResponse.json({ error: 'Request blocked by desensitization rules' }, { status: 403 });
     }
 
     if (allHits.length > 0) {
-      auditLogger.log({
-        tokenId: token.id,
-        userId: token.userId,
-        logType: 'desensitize_hit',
-        action: path,
-        requestMethod: method,
-        ipAddress: clientIp,
-        userAgent,
-        detail: JSON.stringify({ hits: allHits })
-      });
+      desensitizeHitResults.push(...allHits);
     }
   }
 
@@ -421,7 +416,7 @@ async function handleRequest(
 
   try {
     if (isStream) {
-      const providers = await prisma.token.findUnique({
+      const tokenRecord = await prisma.token.findUnique({
         where: { keyHash: tokenHash },
         include: {
           tokenProviders: {
@@ -431,7 +426,7 @@ async function handleRequest(
         }
       });
 
-      if (!providers) {
+      if (!tokenRecord) {
         auditLogger.log({
           tokenId: token.id,
           userId: token.userId,
@@ -447,9 +442,18 @@ async function handleRequest(
         return NextResponse.json({ error: 'Token not found' }, { status: 404 });
       }
 
+      let providerList = tokenRecord.tokenProviders;
+      if (providerList.length === 0) {
+        const allActiveProviders = await prisma.provider.findMany({
+          where: { status: 'active' },
+          orderBy: { name: 'asc' }
+        });
+        providerList = allActiveProviders.map((p: any) => ({ provider: p, priority: 1 })) as any;
+      }
+
       const failedProviderIds: string[] = [];
 
-      for (const tp of providers.tokenProviders) {
+      for (const tp of providerList) {
         if (!circuitBreaker.isAvailable(tp.provider.id)) {
           failedProviderIds.push(tp.provider.id);
           continue;
@@ -516,6 +520,7 @@ async function handleRequest(
                 }
 
                 isAuditLogFullBodyEnabled().then((logFullBody) => {
+                  const hasHits = desensitizeHitResults.length > 0;
                   auditLogger.log({
                     tokenId: token.id,
                     userId: token.userId,
@@ -532,8 +537,9 @@ async function handleRequest(
                     failover: failedProviderIds.length > 0,
                     ipAddress: clientIp,
                     userAgent,
-                    requestBody: logFullBody && body ? JSON.stringify(body).slice(0, 50000) : undefined,
-                    responseBody: logFullBody ? fullText.slice(0, 50000) : undefined,
+                    requestBody: (logFullBody || hasHits) && body ? JSON.stringify(body).slice(0, 50000) : undefined,
+                    responseBody: logFullBody ? extractReadableText(fullText).slice(0, 50000) || fullText.slice(0, 50000) : undefined,
+                    desensitizeHits: hasHits ? JSON.stringify(desensitizeHitResults) : undefined,
                   });
                 });
               },
@@ -580,9 +586,9 @@ async function handleRequest(
         isStream: true,
         detail: JSON.stringify({
           reason: 'All providers failed',
-          providerCount: providers.tokenProviders.length,
+          providerCount: providerList.length,
           failedProviderIds,
-          noProviderBound: providers.tokenProviders.length === 0
+          noProviderBound: providerList.length === 0
         })
       });
       return NextResponse.json({ error: 'All providers failed' }, { status: 502 });
@@ -644,6 +650,7 @@ async function handleRequest(
     }
 
     const logFullBody = await isAuditLogFullBodyEnabled();
+    const hasDesensitizeHits = desensitizeHitResults.length > 0;
     auditLogger.log({
       tokenId: token.id,
       userId: token.userId,
@@ -659,8 +666,9 @@ async function handleRequest(
       failover: result.failover,
       ipAddress: clientIp,
       userAgent,
-      requestBody: logFullBody && body ? JSON.stringify(body).slice(0, 50000) : undefined,
+      requestBody: (logFullBody || hasDesensitizeHits) && body ? JSON.stringify(body).slice(0, 50000) : undefined,
       responseBody: logFullBody && result.response.body ? JSON.stringify(result.response.body).slice(0, 50000) : undefined,
+      desensitizeHits: hasDesensitizeHits ? JSON.stringify(desensitizeHitResults) : undefined,
     });
 
     return NextResponse.json(result.response.body, {

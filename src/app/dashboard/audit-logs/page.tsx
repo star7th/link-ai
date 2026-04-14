@@ -11,6 +11,7 @@ interface AuditLog {
   totalTokens: number | null;
   responseTime: number | null;
   createdAt: string;
+  desensitizeHits?: string;
   token: { name: string } | null;
   provider: { name: string } | null;
 }
@@ -88,19 +89,20 @@ export default function AuditLogsPage() {
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell">提供商</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground">状态码</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell">Token用量</th>
-                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell">耗时</th>
+                   <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell">耗时</th>
+                  <th className="text-left py-3 px-4 font-medium text-muted-foreground">脱敏</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={7} className="text-center py-8 text-muted-foreground">
+                    <td colSpan={8} className="text-center py-8 text-muted-foreground">
                       加载中...
                     </td>
                   </tr>
                 ) : logs.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center py-8 text-muted-foreground">
+                    <td colSpan={8} className="text-center py-8 text-muted-foreground">
                       暂无审计日志
                     </td>
                   </tr>
@@ -134,6 +136,13 @@ export default function AuditLogsPage() {
                       </td>
                       <td className="py-3 px-4 hidden lg:table-cell">
                         {log.responseTime != null ? `${log.responseTime}ms` : "-"}
+                      </td>
+                      <td className="py-3 px-4">
+                        {log.desensitizeHits ? (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-warning/10 text-warning">
+                            命中
+                          </span>
+                        ) : "-"}
                       </td>
                     </tr>
                   ))

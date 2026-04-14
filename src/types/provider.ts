@@ -7,7 +7,6 @@ export interface Provider {
   protocolType: ProtocolType;
   apiBaseUrl: string;
   apiKeyEncrypted: string;
-  defaultModels?: string;
   status: 'active' | 'disabled';
   totalRpmLimit?: number;
   totalTpmLimit?: number;
@@ -57,7 +56,6 @@ export interface CreateProviderInput {
   protocolType: ProtocolType;
   apiBaseUrl: string;
   apiKey: string;
-  defaultModels?: string[];
   totalRpmLimit?: number;
   totalTpmLimit?: number;
   failoverConfig?: Partial<FailoverConfig>;

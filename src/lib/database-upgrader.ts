@@ -532,6 +532,58 @@ const DB_VERSIONS = [
         `);
       }
     }
+  },
+  {
+    version: 13,
+    name: '移除提供商默认模型字段',
+    check: async () => {
+      return !(await hasColumn('Provider', 'defaultModels'));
+    },
+    upgrade: async () => {
+      if (await hasColumn('Provider', 'defaultModels')) {
+        await prisma.$executeRawUnsafe(`
+          PRAGMA defer_foreign_keys=ON;
+          PRAGMA foreign_keys=OFF;
+          CREATE TABLE "new_Provider" (
+            "id" TEXT NOT NULL PRIMARY KEY,
+            "name" TEXT NOT NULL,
+            "code" TEXT NOT NULL,
+            "protocolType" TEXT NOT NULL,
+            "apiBaseUrl" TEXT NOT NULL,
+            "apiKeyEncrypted" TEXT NOT NULL,
+            "status" TEXT NOT NULL DEFAULT 'active',
+            "totalRpmLimit" INTEGER,
+            "totalTpmLimit" INTEGER,
+            "healthStatus" TEXT NOT NULL DEFAULT 'unknown',
+            "lastHealthCheck" DATETIME,
+            "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            "updatedAt" DATETIME NOT NULL
+          );
+          INSERT INTO "new_Provider" ("id", "name", "code", "protocolType", "apiBaseUrl", "apiKeyEncrypted", "status", "totalRpmLimit", "totalTpmLimit", "healthStatus", "lastHealthCheck", "createdAt", "updatedAt")
+            SELECT "id", "name", "code", "protocolType", "apiBaseUrl", "apiKeyEncrypted", "status", "totalRpmLimit", "totalTpmLimit", "healthStatus", "lastHealthCheck", "createdAt", "updatedAt" FROM "Provider";
+          DROP TABLE "Provider";
+          ALTER TABLE "new_Provider" RENAME TO "Provider";
+          CREATE UNIQUE INDEX "Provider_name_key" ON "Provider"("name");
+          CREATE UNIQUE INDEX "Provider_code_key" ON "Provider"("code");
+          CREATE INDEX "Provider_status_idx" ON "Provider"("status");
+          CREATE INDEX "Provider_healthStatus_idx" ON "Provider"("healthStatus");
+          PRAGMA foreign_keys=ON;
+          PRAGMA defer_foreign_keys=OFF;
+        `);
+      }
+    }
+  },
+  {
+    version: 14,
+    name: '审计日志增加脱敏命中标记字段',
+    check: async () => {
+      return await hasColumn('AuditLog', 'desensitizeHits');
+    },
+    upgrade: async () => {
+      if (!await hasColumn('AuditLog', 'desensitizeHits')) {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" ADD COLUMN "desensitizeHits" TEXT;`);
+      }
+    }
   }
 ];
 

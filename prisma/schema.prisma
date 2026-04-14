@@ -120,7 +120,6 @@ model Provider {
   protocolType    String
   apiBaseUrl      String
   apiKeyEncrypted String
-  defaultModels   String?
   status          String              @default("active")
   totalRpmLimit   Int?
   totalTpmLimit   Int?
@@ -293,11 +292,12 @@ model AuditLog {
   ipAddress          String?
   userAgent          String?
   detail             String?
-  requestBody        String?
-  responseBody       String?
-  contentHash        String?
-  previousHash       String?
-  createdAt          DateTime  @default(now())
+   requestBody        String?
+   responseBody       String?
+   contentHash        String?
+   previousHash       String?
+   desensitizeHits    String?
+   createdAt          DateTime  @default(now())
 
   user               User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   token              Token?    @relation(fields: [tokenId], references: [id], onDelete: SetNull)

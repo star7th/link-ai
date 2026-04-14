@@ -21,8 +21,11 @@ export interface AuditLog {
   ipAddress?: string;
   userAgent?: string;
   detail?: string;
+  requestBody?: string;
+  responseBody?: string;
   contentHash?: string;
   previousHash?: string;
+  desensitizeHits?: string;
   createdAt: Date;
 }
 

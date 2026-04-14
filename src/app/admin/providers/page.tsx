@@ -34,7 +34,6 @@ interface CreateProviderForm {
   protocolType: string;
   apiBaseUrl: string;
   apiKey: string;
-  defaultModels: string;
   totalRpmLimit: string;
   totalTpmLimit: string;
 }
@@ -190,7 +189,6 @@ function CreateProviderModal({
     protocolType: "openai",
     apiBaseUrl: "",
     apiKey: "",
-    defaultModels: "",
     totalRpmLimit: "",
     totalTpmLimit: "",
   });
@@ -227,9 +225,6 @@ function CreateProviderModal({
         apiBaseUrl: form.apiBaseUrl,
         apiKey: form.apiKey,
       };
-      if (form.defaultModels.trim()) {
-        body.defaultModels = form.defaultModels.split(",").map((s) => s.trim()).filter(Boolean);
-      }
       if (form.totalRpmLimit) body.totalRpmLimit = Number(form.totalRpmLimit);
       if (form.totalTpmLimit) body.totalTpmLimit = Number(form.totalTpmLimit);
       const res = await fetch("/api/admin/providers", {
@@ -247,7 +242,6 @@ function CreateProviderModal({
         protocolType: "openai",
         apiBaseUrl: "",
         apiKey: "",
-        defaultModels: "",
         totalRpmLimit: "",
         totalTpmLimit: "",
       });
@@ -331,14 +325,6 @@ function CreateProviderModal({
                 onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
                 placeholder="请输入API密钥"
                 required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">默认模型</label>
-              <Input
-                value={form.defaultModels}
-                onChange={(e) => setForm({ ...form, defaultModels: e.target.value })}
-                placeholder="多个模型用逗号分隔，如 gpt-4,gpt-3.5-turbo"
               />
             </div>
             <div className="grid grid-cols-2 gap-4">

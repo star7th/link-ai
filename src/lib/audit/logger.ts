@@ -23,6 +23,7 @@ type AuditLogEntry = {
   detail?: string;
   requestBody?: string;
   responseBody?: string;
+  desensitizeHits?: string;
 };
 
 type PendingEntry = AuditLogEntry & { contentHash?: string; previousHash?: string };
@@ -59,6 +60,28 @@ class AuditLogger {
     }
   }
 
+  markDesensitizeHits(tokenId: string, hits: Array<{ ruleName: string; action: string; matchCount: number }>, requestBody: string): void {
+    const target = this.buffer.find(e => e.tokenId === tokenId && e.logType === 'request');
+    if (target) {
+      target.desensitizeHits = JSON.stringify(hits);
+      if (!target.requestBody) {
+        target.requestBody = requestBody.slice(0, 50000);
+      }
+    } else {
+      prisma.auditLog.updateMany({
+        where: { tokenId, logType: 'request' },
+        data: {
+          desensitizeHits: JSON.stringify(hits),
+          requestBody: requestBody.slice(0, 50000),
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+      }).catch((err: unknown) => {
+        console.error('Failed to mark desensitize hits on existing audit log:', err);
+      });
+    }
+  }
+
   async flush(): Promise<void> {
     if (this.buffer.length === 0) return;
 
@@ -88,6 +111,7 @@ class AuditLogger {
           detail: e.detail,
           requestBody: e.requestBody,
           responseBody: e.responseBody,
+          desensitizeHits: e.desensitizeHits,
           contentHash: e.contentHash,
           previousHash: e.previousHash,
           createdAt: new Date()

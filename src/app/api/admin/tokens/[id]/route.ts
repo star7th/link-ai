@@ -23,7 +23,7 @@ export async function PATCH(
   if (authError) return authError;
 
   const body = await request.json();
-  const { name, status, rpmLimit, tpmLimit, ipRuleMode, quotaTokenLimit, quotaRequestLimit, quotaPeriod, expiresAt } = body;
+  const { name, status, rpmLimit, tpmLimit, ipRuleMode, quotaTokenLimit, quotaRequestLimit, quotaPeriod, expiresAt, providers } = body;
 
   const updateData: any = {};
   if (name) updateData.name = name;
@@ -36,9 +36,28 @@ export async function PATCH(
   if (quotaPeriod) updateData.quotaPeriod = quotaPeriod;
   if (expiresAt) updateData.expiresAt = new Date(expiresAt);
 
+  if (providers !== undefined) {
+    await prisma.tokenProvider.deleteMany({ where: { tokenId: id } });
+    if (Array.isArray(providers) && providers.length > 0) {
+      await prisma.tokenProvider.createMany({
+        data: providers.map((p: any, idx: number) => ({
+          tokenId: id,
+          providerId: p.providerId,
+          priority: idx + 1,
+        })),
+      });
+    }
+  }
+
   const token = await prisma.token.update({
     where: { id: id },
-    data: updateData
+    data: updateData,
+    include: {
+      tokenProviders: {
+        include: { provider: { select: { id: true, name: true, code: true } } },
+        orderBy: { priority: 'asc' },
+      },
+    },
   });
 
   return NextResponse.json(token);

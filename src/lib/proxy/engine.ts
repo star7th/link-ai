@@ -56,12 +56,26 @@ export class ProxyEngine {
       return [];
     }
 
-    return token.tokenProviders.map((tp: any) => ({
-      id: tp.provider.id,
-      apiBaseUrl: tp.provider.apiBaseUrl,
-      apiKeyEncrypted: tp.provider.apiKeyEncrypted,
-      protocolType: tp.provider.protocolType,
-      name: tp.provider.name
+    if (token.tokenProviders.length > 0) {
+      return token.tokenProviders.map((tp: any) => ({
+        id: tp.provider.id,
+        apiBaseUrl: tp.provider.apiBaseUrl,
+        apiKeyEncrypted: tp.provider.apiKeyEncrypted,
+        protocolType: tp.provider.protocolType,
+        name: tp.provider.name
+      }));
+    }
+
+    const allProviders = await prisma.provider.findMany({
+      where: { status: 'active' },
+      orderBy: { name: 'asc' }
+    });
+    return allProviders.map((p: any) => ({
+      id: p.id,
+      apiBaseUrl: p.apiBaseUrl,
+      apiKeyEncrypted: p.apiKeyEncrypted,
+      protocolType: p.protocolType,
+      name: p.name
     }));
   }
 

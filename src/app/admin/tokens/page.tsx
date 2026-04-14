@@ -61,7 +61,7 @@ interface CreateTokenForm {
   rpmLimit: string;
   tpmLimit: string;
   quotaTokenLimit: string;
-  providerIds: string[];
+  providerIds: { providerId: string; priority: number }[];
 }
 
 function CreateTokenModal({
@@ -87,6 +87,7 @@ function CreateTokenModal({
   const [mounted, setMounted] = useState(false);
   const [createdKey, setCreatedKey] = useState("");
   const [keyCopied, setKeyCopied] = useState(false);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
 
   const fallbackCopy = (text: string) => {
     const textarea = document.createElement("textarea");
@@ -143,8 +144,8 @@ function CreateTokenModal({
       if (form.rpmLimit) body.rpmLimit = Number(form.rpmLimit);
       if (form.tpmLimit) body.tpmLimit = Number(form.tpmLimit);
       if (form.quotaTokenLimit) body.quotaTokenLimit = Number(form.quotaTokenLimit);
-      if (form.providerIds && form.providerIds.length > 0) {
-        body.providerIds = form.providerIds;
+      if (form.providerIds.length > 0) {
+        body.providerIds = form.providerIds.map((p) => p.providerId);
       }
       const res = await fetch("/api/admin/tokens", {
         method: "POST",
@@ -266,38 +267,73 @@ function CreateTokenModal({
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">绑定提供商（可选）</label>
-              <div className="space-y-2 max-h-32 overflow-y-auto border border-primary/20 dark:border-primary/30 rounded-md p-2">
-                {fetchingProviders ? (
-                  <div className="text-sm text-muted-foreground py-2">加载中...</div>
-                ) : providers.length === 0 ? (
-                  <div className="text-sm text-muted-foreground py-2">暂无可用提供商</div>
-                ) : (
-                  providers.map((provider) => (
-                    <label key={provider.id} className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="rounded border-primary/30 text-primary focus:ring-primary"
-                        checked={form.providerIds.includes(provider.id.toString())}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setForm({
-                              ...form,
-                              providerIds: [...form.providerIds, provider.id.toString()],
-                            });
-                          } else {
-                            setForm({
-                              ...form,
-                              providerIds: form.providerIds.filter((id) => id !== provider.id.toString()),
-                            });
-                          }
-                        }}
-                      />
-                      <span className="text-sm">{provider.name}</span>
-                      <span className="text-xs text-muted-foreground">({provider.code})</span>
-                    </label>
-                  ))
+              <label className="block text-sm font-medium mb-1">绑定提供商（可选，不选则默认使用全部可用提供商）</label>
+              <div className="space-y-2">
+                {form.providerIds.length > 0 && (
+                  <div className="space-y-1 border border-primary/20 dark:border-primary/30 rounded-md p-2">
+                    {form.providerIds.map((p, idx) => {
+                      const prov = providers.find((ap) => ap.id.toString() === p.providerId);
+                      return (
+                        <div
+                          key={p.providerId}
+                          draggable
+                          onDragStart={() => setDragIdx(idx)}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={() => {
+                            if (dragIdx !== null && dragIdx !== idx) {
+                              const items = [...form.providerIds];
+                              const [moved] = items.splice(dragIdx, 1);
+                              items.splice(idx, 0, moved);
+                              setForm({ ...form, providerIds: items });
+                            }
+                            setDragIdx(null);
+                          }}
+                          onDragEnd={() => setDragIdx(null)}
+                          className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-grab active:cursor-grabbing select-none ${dragIdx === idx ? "opacity-50 bg-primary/10" : "hover:bg-primary/5"}`}
+                        >
+                          <span className="text-xs text-muted-foreground">☰</span>
+                          <span className="text-xs font-mono text-muted-foreground">{idx + 1}.</span>
+                          <span className="text-sm">{prov?.name || p.providerId}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="ml-auto h-6 w-6 p-0 text-error hover:text-error"
+                            onClick={() => {
+                              setForm({ ...form, providerIds: form.providerIds.filter((_, i) => i !== idx) });
+                            }}
+                          >
+                            ×
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
+                <div className="max-h-32 overflow-y-auto border border-primary/20 dark:border-primary/30 rounded-md p-2">
+                  {fetchingProviders ? (
+                    <div className="text-sm text-muted-foreground py-2">加载中...</div>
+                  ) : providers.length === 0 ? (
+                    <div className="text-sm text-muted-foreground py-2">暂无可用提供商</div>
+                  ) : (
+                    providers
+                      .filter((ap) => !form.providerIds.some((p) => p.providerId === ap.id.toString()))
+                      .map((provider) => (
+                        <label key={provider.id} className="flex items-center gap-2 cursor-pointer py-1">
+                          <input
+                            type="checkbox"
+                            className="rounded border-primary/30 text-primary focus:ring-primary"
+                            checked={false}
+                            onChange={() => {
+                              setForm({ ...form, providerIds: [...form.providerIds, { providerId: provider.id.toString(), priority: form.providerIds.length + 1 }] });
+                            }}
+                          />
+                          <span className="text-sm">{provider.name}</span>
+                          <span className="text-xs text-muted-foreground">({provider.code})</span>
+                        </label>
+                      ))
+                  )}
+                </div>
               </div>
             </div>
             {error && <p className="text-sm text-error">{error}</p>}
@@ -319,6 +355,225 @@ function CreateTokenModal({
   return createPortal(modal, document.body);
 }
 
+function EditTokenModal({
+  token,
+  isOpen,
+  onClose,
+  onSuccess,
+}: {
+  token: Token | null;
+  isOpen: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [form, setForm] = useState({
+    name: "",
+    rpmLimit: "",
+    tpmLimit: "",
+    status: "",
+    providers: [] as { providerId: string; priority: number }[],
+  });
+  const [availableProviders, setAvailableProviders] = useState<Provider[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [mounted, setMounted] = useState(false);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (isOpen && token) {
+      setForm({
+        name: token.name,
+        rpmLimit: token.rpmLimit?.toString() ?? "",
+        tpmLimit: token.tpmLimit?.toString() ?? "",
+        status: token.status,
+        providers: token.tokenProviders
+          .sort((a, b) => a.priority - b.priority)
+          .map((tp, idx) => ({ providerId: String(tp.provider.id), priority: idx + 1 })),
+      });
+      setError("");
+      fetch("/api/admin/providers?limit=100")
+        .then((res) => res.json())
+        .then((data) => setAvailableProviders((data.providers || []).filter((p: Provider) => p.status === "active")))
+        .catch(() => setAvailableProviders([]));
+    }
+  }, [isOpen, token]);
+
+  useEffect(() => {
+    if (isOpen) {
+      document.body.style.overflow = "hidden";
+    }
+    return () => {
+      document.body.style.overflow = "auto";
+    };
+  }, [isOpen]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token) return;
+    setLoading(true);
+    setError("");
+    try {
+      const body: Record<string, unknown> = {
+        name: form.name,
+        status: form.status,
+        providers: form.providers.map((p, idx) => ({ providerId: p.providerId, priority: idx + 1 })),
+      };
+      if (form.rpmLimit) body.rpmLimit = Number(form.rpmLimit);
+      if (form.tpmLimit) body.tpmLimit = Number(form.tpmLimit);
+      const res = await fetch(`/api/admin/tokens/${token.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "更新令牌失败");
+      }
+      onSuccess();
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "更新令牌失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!mounted || !isOpen) return null;
+
+  const modal = (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center">
+      <div
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div className="relative max-w-md w-full mx-4 dark:bg-dark-card bg-light-card rounded-lg shadow-lg border border-primary/15 overflow-hidden">
+        <div className="p-6 max-h-[85vh] overflow-y-auto">
+          <h3 className="text-lg font-semibold mb-4">编辑令牌</h3>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                名称 <span className="text-error">*</span>
+              </label>
+              <Input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">状态</label>
+              <select
+                value={form.status}
+                onChange={(e) => setForm({ ...form, status: e.target.value })}
+                className="w-full h-10 rounded-md border border-primary/20 dark:border-primary/30 bg-light-input dark:bg-dark-input px-3 py-2 text-sm text-light-text-primary dark:text-dark-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+              >
+                <option value="active">启用</option>
+                <option value="disabled">禁用</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">RPM限制</label>
+              <Input
+                type="number"
+                value={form.rpmLimit}
+                onChange={(e) => setForm({ ...form, rpmLimit: e.target.value })}
+                placeholder="0"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">TPM限制</label>
+              <Input
+                type="number"
+                value={form.tpmLimit}
+                onChange={(e) => setForm({ ...form, tpmLimit: e.target.value })}
+                placeholder="0"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">绑定提供商（拖动排序调整优先级）</label>
+              <div className="space-y-2">
+                {form.providers.length > 0 && (
+                  <div className="space-y-1 border border-primary/20 dark:border-primary/30 rounded-md p-2">
+                    {form.providers.map((p, idx) => {
+                      const prov = availableProviders.find((ap) => ap.id.toString() === p.providerId);
+                      return (
+                        <div
+                          key={p.providerId}
+                          draggable
+                          onDragStart={() => setDragIdx(idx)}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={() => {
+                            if (dragIdx !== null && dragIdx !== idx) {
+                              const items = [...form.providers];
+                              const [moved] = items.splice(dragIdx, 1);
+                              items.splice(idx, 0, moved);
+                              setForm({ ...form, providers: items });
+                            }
+                            setDragIdx(null);
+                          }}
+                          onDragEnd={() => setDragIdx(null)}
+                          className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-grab active:cursor-grabbing select-none ${dragIdx === idx ? "opacity-50 bg-primary/10" : "hover:bg-primary/5"}`}
+                        >
+                          <span className="text-xs text-muted-foreground">☰</span>
+                          <span className="text-xs font-mono text-muted-foreground">{idx + 1}.</span>
+                          <span className="text-sm">{prov?.name || p.providerId}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="ml-auto h-6 w-6 p-0 text-error hover:text-error"
+                            onClick={() => {
+                              setForm({ ...form, providers: form.providers.filter((_, i) => i !== idx) });
+                            }}
+                          >
+                            ×
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="max-h-32 overflow-y-auto border border-primary/20 dark:border-primary/30 rounded-md p-2">
+                  {availableProviders
+                    .filter((ap) => !form.providers.some((p) => p.providerId === ap.id.toString()))
+                    .map((provider) => (
+                      <label key={provider.id} className="flex items-center gap-2 cursor-pointer py-1">
+                        <input
+                          type="checkbox"
+                          className="rounded border-primary/30 text-primary focus:ring-primary"
+                          checked={false}
+                          onChange={() => {
+                            setForm({ ...form, providers: [...form.providers, { providerId: provider.id.toString(), priority: form.providers.length + 1 }] });
+                          }}
+                        />
+                        <span className="text-sm">{provider.name}</span>
+                      </label>
+                    ))}
+                </div>
+              </div>
+            </div>
+            {error && <p className="text-sm text-error">{error}</p>}
+            <div className="flex justify-end space-x-3 pt-2">
+              <Button type="button" variant="outline" onClick={onClose}>
+                取消
+              </Button>
+              <Button type="submit" disabled={loading}>
+                {loading ? "保存中..." : "保存"}
+              </Button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+
+  return createPortal(modal, document.body);
+}
+
 export default function AdminTokensPage() {
   const [tokens, setTokens] = useState<Token[]>([]);
   const [total, setTotal] = useState(0);
@@ -327,6 +582,8 @@ export default function AdminTokensPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingToken, setEditingToken] = useState<Token | null>(null);
+  const [showEditModal, setShowEditModal] = useState(false);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
@@ -453,10 +710,10 @@ export default function AdminTokensPage() {
   };
 
   const getProviderNames = (tokenProviders: TokenProvider[]) => {
-    if (!tokenProviders || tokenProviders.length === 0) return "-";
+    if (!tokenProviders || tokenProviders.length === 0) return "默认全部";
     return tokenProviders
       .sort((a, b) => a.priority - b.priority)
-      .map((tp) => tp.provider.name)
+      .map((tp, idx) => `${idx + 1}.${tp.provider.name}`)
       .join(", ");
   };
 
@@ -552,6 +809,16 @@ export default function AdminTokensPage() {
                           <Button
                             variant="ghost"
                             size="sm"
+                            onClick={() => {
+                              setEditingToken(token);
+                              setShowEditModal(true);
+                            }}
+                          >
+                            编辑
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             onClick={() => handleCopyKey(token)}
                           >
                             {copiedId === token.id ? "已复制" : "复制密钥"}
@@ -640,6 +907,16 @@ export default function AdminTokensPage() {
       <CreateTokenModal
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}
+        onSuccess={fetchTokens}
+      />
+
+      <EditTokenModal
+        token={editingToken}
+        isOpen={showEditModal}
+        onClose={() => {
+          setShowEditModal(false);
+          setEditingToken(null);
+        }}
         onSuccess={fetchTokens}
       />
     </div>

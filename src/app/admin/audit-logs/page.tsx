@@ -22,6 +22,7 @@ interface AuditLog {
   createdAt: string;
   requestBody?: string;
   responseBody?: string;
+  desensitizeHits?: string;
   user: { username: string } | null;
   token: { name: string; keyPrefix: string } | null;
   provider: { name: string } | null;
@@ -112,11 +113,32 @@ function LogDetailModal({
               </pre>
             </div>
           )}
-          {!log.requestBody && !log.responseBody && (
+          {!log.requestBody && !log.responseBody && !log.desensitizeHits && (
             <div className="text-sm text-muted-foreground text-center py-4">
               未记录请求/响应内容（需开启"记录完整请求/响应"开关）
             </div>
           )}
+          {log.desensitizeHits && (() => {
+            try {
+              const hits = JSON.parse(log.desensitizeHits);
+              return (
+                <div>
+                  <div className="text-sm font-medium mb-1">脱敏命中规则</div>
+                  <div className="space-y-1">
+                    {hits.map((hit: any, idx: number) => (
+                      <div key={idx} className="text-xs bg-warning/5 dark:bg-warning/10 border border-warning/20 rounded-md p-2 flex items-center gap-2">
+                        <span className="font-medium text-warning">{hit.action === "replace" ? "替换" : hit.action === "block" ? "拦截" : "记录"}</span>
+                        <span>规则: {hit.ruleName}</span>
+                        <span className="text-muted-foreground">命中 {hit.matchCount} 次</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            } catch {
+              return null;
+            }
+          })()}
         </div>
       </div>
     </div>
@@ -393,9 +415,16 @@ export default function AdminAuditLogsPage() {
                       </td>
                       <td className="py-3 px-4 hidden lg:table-cell font-mono text-xs">{log.ipAddress || "-"}</td>
                       <td className="py-3 px-4">
-                        <Button variant="ghost" size="sm" onClick={() => handleViewDetail(log)}>
-                          查看
-                        </Button>
+                        <div className="flex items-center gap-1">
+                          <Button variant="ghost" size="sm" onClick={() => handleViewDetail(log)}>
+                            查看
+                          </Button>
+                          {log.desensitizeHits && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-warning/10 text-warning" title="触发脱敏规则">
+                              脱敏
+                            </span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))

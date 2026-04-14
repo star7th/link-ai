@@ -75,3 +75,29 @@ export function extractStreamUsage(data: string): {
   } catch {}
   return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 }
+
+export function extractReadableText(data: string): string {
+  const parts: string[] = [];
+  try {
+    const lines = data.split('\n').filter((l) => l.startsWith('data: '));
+    for (const line of lines) {
+      const jsonStr = line.replace('data: ', '').trim();
+      if (jsonStr === '[DONE]') continue;
+      try {
+        const parsed = JSON.parse(jsonStr);
+        const choices = parsed.choices;
+        if (Array.isArray(choices)) {
+          for (const choice of choices) {
+            const delta = choice.delta;
+            if (delta?.content) {
+              parts.push(delta.content);
+            }
+          }
+        }
+      } catch {
+        // skip non-JSON lines
+      }
+    }
+  } catch {}
+  return parts.join('');
+}

@@ -69,6 +69,7 @@ function CreateTokenModal({
   const [mounted, setMounted] = useState(false);
   const [createdKey, setCreatedKey] = useState("");
   const [keyCopied, setKeyCopied] = useState(false);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
 
   const fallbackCopy = (text: string) => {
     const textarea = document.createElement("textarea");
@@ -236,32 +237,73 @@ function CreateTokenModal({
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">绑定提供商（可选）</label>
-              <div className="space-y-2 max-h-32 overflow-y-auto border border-primary/20 dark:border-primary/30 rounded-md p-2">
-                {fetchingProviders ? (
-                  <div className="text-sm text-muted-foreground py-2">加载中...</div>
-                ) : availableProviders.length === 0 ? (
-                  <div className="text-sm text-muted-foreground py-2">暂无可用提供商</div>
-                ) : (
-                  availableProviders.map((provider, idx) => (
-                    <label key={provider.id} className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="rounded border-primary/30 text-primary focus:ring-primary"
-                        checked={form.providers.some((p) => p.providerId === provider.id)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setForm({ ...form, providers: [...form.providers, { providerId: provider.id, priority: form.providers.length + 1 }] });
-                          } else {
-                            setForm({ ...form, providers: form.providers.filter((p) => p.providerId !== provider.id) });
-                          }
-                        }}
-                      />
-                      <span className="text-sm">{provider.name}</span>
-                      <span className="text-xs text-muted-foreground">({provider.code})</span>
-                    </label>
-                  ))
+              <label className="block text-sm font-medium mb-1">绑定提供商（可选，不选则默认使用全部可用提供商）</label>
+              <div className="space-y-2">
+                {form.providers.length > 0 && (
+                  <div className="space-y-1 border border-primary/20 dark:border-primary/30 rounded-md p-2">
+                    {form.providers.map((p, idx) => {
+                      const prov = availableProviders.find((ap) => ap.id === p.providerId);
+                      return (
+                        <div
+                          key={p.providerId}
+                          draggable
+                          onDragStart={() => setDragIdx(idx)}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={() => {
+                            if (dragIdx !== null && dragIdx !== idx) {
+                              const items = [...form.providers];
+                              const [moved] = items.splice(dragIdx, 1);
+                              items.splice(idx, 0, moved);
+                              setForm({ ...form, providers: items });
+                            }
+                            setDragIdx(null);
+                          }}
+                          onDragEnd={() => setDragIdx(null)}
+                          className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-grab active:cursor-grabbing select-none ${dragIdx === idx ? "opacity-50 bg-primary/10" : "hover:bg-primary/5"}`}
+                        >
+                          <span className="text-xs text-muted-foreground">☰</span>
+                          <span className="text-xs font-mono text-muted-foreground">{idx + 1}.</span>
+                          <span className="text-sm">{prov?.name || p.providerId}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="ml-auto h-6 w-6 p-0 text-error hover:text-error"
+                            onClick={() => {
+                              setForm({ ...form, providers: form.providers.filter((_, i) => i !== idx) });
+                            }}
+                          >
+                            ×
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
+                <div className="max-h-32 overflow-y-auto border border-primary/20 dark:border-primary/30 rounded-md p-2">
+                  {fetchingProviders ? (
+                    <div className="text-sm text-muted-foreground py-2">加载中...</div>
+                  ) : availableProviders.length === 0 ? (
+                    <div className="text-sm text-muted-foreground py-2">暂无可用提供商</div>
+                  ) : (
+                    availableProviders
+                      .filter((ap) => !form.providers.some((p) => p.providerId === ap.id))
+                      .map((provider) => (
+                        <label key={provider.id} className="flex items-center gap-2 cursor-pointer py-1">
+                          <input
+                            type="checkbox"
+                            className="rounded border-primary/30 text-primary focus:ring-primary"
+                            checked={false}
+                            onChange={() => {
+                              setForm({ ...form, providers: [...form.providers, { providerId: provider.id, priority: form.providers.length + 1 }] });
+                            }}
+                          />
+                          <span className="text-sm">{provider.name}</span>
+                          <span className="text-xs text-muted-foreground">({provider.code})</span>
+                        </label>
+                      ))
+                  )}
+                </div>
               </div>
             </div>
             {error && <p className="text-sm text-error">{error}</p>}
@@ -294,10 +336,12 @@ function EditTokenModal({
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const [form, setForm] = useState({ name: "", rpmLimit: "", tpmLimit: "", status: "" });
+  const [form, setForm] = useState({ name: "", rpmLimit: "", tpmLimit: "", status: "", providers: [] as { providerId: string; priority: number }[] });
+  const [availableProviders, setAvailableProviders] = useState<AvailableProvider[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [mounted, setMounted] = useState(false);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -310,8 +354,13 @@ function EditTokenModal({
         rpmLimit: token.rpmLimit?.toString() ?? "",
         tpmLimit: token.tpmLimit?.toString() ?? "",
         status: token.status,
+        providers: token.tokenProviders.map((tp, idx) => ({ providerId: String(tp.provider.id), priority: idx + 1 })),
       });
       setError("");
+      fetch("/api/user/providers")
+        .then((res) => res.json())
+        .then((data) => setAvailableProviders(data.providers || []))
+        .catch(() => setAvailableProviders([]));
     }
   }, [isOpen, token]);
 
@@ -336,6 +385,7 @@ function EditTokenModal({
       };
       if (form.rpmLimit) body.rpmLimit = Number(form.rpmLimit);
       if (form.tpmLimit) body.tpmLimit = Number(form.tpmLimit);
+      body.providers = form.providers.map((p, idx) => ({ providerId: p.providerId, priority: idx + 1 }));
       const res = await fetch(`/api/user/tokens/${token.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -404,6 +454,69 @@ function EditTokenModal({
                 onChange={(e) => setForm({ ...form, tpmLimit: e.target.value })}
                 placeholder="0"
               />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">绑定提供商（拖动排序调整优先级）</label>
+              <div className="space-y-2">
+                {form.providers.length > 0 && (
+                  <div className="space-y-1 border border-primary/20 dark:border-primary/30 rounded-md p-2">
+                    {form.providers.map((p, idx) => {
+                      const prov = availableProviders.find((ap) => ap.id === p.providerId);
+                      return (
+                        <div
+                          key={p.providerId}
+                          draggable
+                          onDragStart={() => setDragIdx(idx)}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={() => {
+                            if (dragIdx !== null && dragIdx !== idx) {
+                              const items = [...form.providers];
+                              const [moved] = items.splice(dragIdx, 1);
+                              items.splice(idx, 0, moved);
+                              setForm({ ...form, providers: items });
+                            }
+                            setDragIdx(null);
+                          }}
+                          onDragEnd={() => setDragIdx(null)}
+                          className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-grab active:cursor-grabbing select-none ${dragIdx === idx ? "opacity-50 bg-primary/10" : "hover:bg-primary/5"}`}
+                        >
+                          <span className="text-xs text-muted-foreground">☰</span>
+                          <span className="text-xs font-mono text-muted-foreground">{idx + 1}.</span>
+                          <span className="text-sm">{prov?.name || p.providerId}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="ml-auto h-6 w-6 p-0 text-error hover:text-error"
+                            onClick={() => {
+                              setForm({ ...form, providers: form.providers.filter((_, i) => i !== idx) });
+                            }}
+                          >
+                            ×
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="max-h-32 overflow-y-auto border border-primary/20 dark:border-primary/30 rounded-md p-2">
+                  {availableProviders
+                    .filter((ap) => !form.providers.some((p) => p.providerId === ap.id))
+                    .map((provider) => (
+                      <label key={provider.id} className="flex items-center gap-2 cursor-pointer py-1">
+                        <input
+                          type="checkbox"
+                          className="rounded border-primary/30 text-primary focus:ring-primary"
+                          checked={false}
+                          onChange={() => {
+                            setForm({ ...form, providers: [...form.providers, { providerId: provider.id, priority: form.providers.length + 1 }] });
+                          }}
+                        />
+                        <span className="text-sm">{provider.name}</span>
+                      </label>
+                    ))}
+                </div>
+              </div>
             </div>
             {error && <p className="text-sm text-error">{error}</p>}
             <div className="flex justify-end space-x-3 pt-2">
@@ -593,17 +706,23 @@ export default function TokensPage() {
                 )}
                 {token.tokenProviders.length > 0 && (
                   <div className="flex items-center gap-2 text-sm">
-                    <span className="text-muted-foreground">绑定提供商:</span>
+                    <span className="text-muted-foreground">提供商:</span>
                     <div className="flex flex-wrap gap-1">
                       {token.tokenProviders.map((tp, idx) => (
                         <span
                           key={idx}
                           className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-primary/10 text-primary"
                         >
-                          {tp.provider.name}
+                          {idx + 1}. {tp.provider.name}
                         </span>
                       ))}
                     </div>
+                  </div>
+                )}
+                {token.tokenProviders.length === 0 && (
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="text-muted-foreground">提供商:</span>
+                    <span className="text-xs text-muted-foreground">默认使用全部可用</span>
                   </div>
                 )}
                 <div className="flex items-center gap-2 text-sm">
