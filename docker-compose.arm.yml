@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  link-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile-ARM
+    restart: always
+    ports:
+      - "3333:3333"
+    volumes:
+      - ~/link-ai_data:/app/data
+    environment:
+      - NODE_ENV=production
+      - PORT=3333
+      - NODE_OPTIONS=--max-old-space-size=2048

@@ -1,0 +1,141 @@
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof. 
+
+   2. License Grant.
+
+      Subject to the terms and conditions of this License, each
+      Contributor hereby grants to You a perpetual, worldwide,
+      non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute
+      the Work and such Derivative Works in Source or Object form.
+
+   3. Conditions.
+
+      1. You must include a copy of this License in all copies or
+         substantial portions of the Work.
+
+      2. You must give any other recipients of the Work or Derivative
+         Works a copy of this License; and
+
+      3. You must cause any modified files to carry prominent notices
+         stating that You changed the files. 
+
+   4. Disclaimer of Warranty.
+
+      Unless required by applicable law or agreed to in writing,
+      Licensor provides the Work (and each Contributor provides its
+      Contributions) on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+      CONDITIONS OF ANY KIND, either express or implied, including,
+      without limitation, any warranties or conditions of TITLE,
+      NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A PARTICULAR
+      PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume
+      any risks associated with Your exercise of permissions under
+      this License. 
+
+   5. Limitation of Liability.
+
+      In no event and under no legal theory, whether in tort
+      (including negligence), contract, or otherwise, shall
+      Licensor, any Contributor, or any distributor of the Work be
+      liable to You for damages, including any direct, indirect,
+      special, incidental, or consequential damages of any character
+      arising as a result of this License or out of the use or
+      inability to use the Work (including but not limited to
+      damages for loss of goodwill, work stoppage, computer failure
+      or malfunction, or any and all other commercial damages or
+      losses), even if such party has been advised of the possibility
+      of such damages. 
+
+   6. Accepting the License.
+
+      You accept and agree to be bound by the terms of this License
+      by copying, modifying, or distributing the Work (or any
+      work based on the Work).
+
+   7. Compliance with Laws.
+
+      You agree to comply with all applicable laws regarding use of
+      the Work. 
+
+   8. Miscellaneous.
+
+      This License constitutes the entire agreement between the
+      parties with respect to the Work licensed hereunder and
+      supersedes all prior or contemporaneous understandings or
+      agreements, whether written or oral, regarding such subject
+      matter. No modification of or amendment to this License will
+      be effective unless in writing and signed by authorized
+      representatives of the parties.
+
+   9. Termination.
+
+      This License and the rights granted hereunder will terminate
+      automatically if You fail to comply with any term of this
+      License. Individuals or entities who have received
+      Derivative Works from You under this License, however, will
+      not have their licenses terminated provided such individuals
+      or entities remain in full compliance with those licenses. 
+
+APPENDIX: How to apply the Apache License to your work.
+
+   If you would like to include this License in your work, you
+   can do so by including the following statement in your
+   documentation:
+
+   This work is licensed under the Apache License, Version 2.0.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing,
+   software distributed under the License is distributed on an
+   "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
+   either express or implied. See the License for the specific
+   language governing permissions and limitations under the
+   License. 

@@ -1,0 +1,43 @@
+import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
+import { getToken } from 'next-auth/jwt';
+
+const publicPaths = ['/', '/auth/login', '/auth/register', '/api/auth', '/setup', '/api/proxy', '/v1'];
+
+export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  const isPublicPath = publicPaths.some(path => pathname.startsWith(path));
+
+  if (isPublicPath) {
+    return NextResponse.next();
+  }
+
+  const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
+
+  if (!token) {
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const url = request.nextUrl.clone();
+    url.pathname = '/auth/login';
+    return NextResponse.redirect(url);
+  }
+
+  if (pathname.startsWith('/admin') && !(token as any).isAdmin) {
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    const url = request.nextUrl.clone();
+    url.pathname = '/dashboard';
+    return NextResponse.redirect(url);
+  }
+
+  return NextResponse.next();
+}
+
+export const config = {
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|public).*)',
+  ],
+};

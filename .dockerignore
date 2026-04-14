@@ -1,0 +1,56 @@
+# Git
+.git
+.gitignore
+
+# 数据目录
+/data/*
+!/data/.gitkeep
+
+# Node.js
+node_modules
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Next.js
+.next
+out
+
+# 环境变量 (允许复制到容器)
+# .env
+# .env.*
+!.env.example
+
+# 编辑器
+.idea
+.vscode
+*.swp
+*.swo
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 调试
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Docker相关
+Dockerfile
+Dockerfile-ARM
+docker-compose.yml
+docker-compose.arm.yml
+.dockerignore
+
+# 测试文件
+coverage
+.nyc_output
+__tests__
+**/*.test.ts
+**/*.spec.ts
+
+# 其他
+README.md
+LICENSE
+*.log 

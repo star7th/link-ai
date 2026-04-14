@@ -1,0 +1,360 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:../data/app.db"
+}
+
+model User {
+  id               String           @id @default(cuid())
+  username         String           @unique
+  name             String?
+  email            String?
+  password         String
+  isAdmin          Boolean          @default(false)
+  status           String           @default("active")
+  quotaTokenLimit  Int?
+  quotaRequestLimit Int?
+  quotaPeriod      String           @default("monthly")
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  sessions         Session[]
+  loginRecords     LoginRecord[]
+  tokens           Token[]
+  desensitizeRules DesensitizeRule[]
+  auditLogs        AuditLog[]
+  groupMembers     UserGroupMember[]
+  userProviders    UserProvider[]
+  quotaSnapshots   QuotaSnapshot[]
+
+  @@index([status])
+  @@index([isAdmin])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model SystemConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model LoginRecord {
+  id        String   @id @default(cuid())
+  userId    String
+  ipAddress String?
+  userAgent String?
+  success   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model UserGroup {
+  id          String              @id @default(cuid())
+  name        String              @unique
+  description String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  members        UserGroupMember[]
+  groupProviders UserGroupProvider[]
+  groupQuotas    UserGroupQuota[]
+}
+
+model UserGroupMember {
+  id        String    @id @default(cuid())
+  groupId   String
+  userId    String
+  role      String    @default("member")
+  createdAt DateTime  @default(now())
+
+  group     UserGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+}
+
+model UserGroupProvider {
+  id         String    @id @default(cuid())
+  groupId    String
+  providerId String
+  createdAt  DateTime  @default(now())
+
+  group     UserGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  provider  Provider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, providerId])
+}
+
+model UserGroupQuota {
+  id          String    @id @default(cuid())
+  groupId     String
+  quotaType   String
+  quotaLimit  Int
+  quotaPeriod String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  group       UserGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, quotaType, quotaPeriod])
+}
+
+model Provider {
+  id              String              @id @default(cuid())
+  name            String              @unique
+  code            String              @unique
+  protocolType    String
+  apiBaseUrl      String
+  apiKeyEncrypted String
+  defaultModels   String?
+  status          String              @default("active")
+  totalRpmLimit   Int?
+  totalTpmLimit   Int?
+  healthStatus    String              @default("unknown")
+  lastHealthCheck DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  tokenProviders  TokenProvider[]
+  groupProviders  UserGroupProvider[]
+  userProviders   UserProvider[]
+  healthLogs      ProviderHealthLog[]
+  auditLogs       AuditLog[]
+  failoverConfig  FailoverConfig?
+
+  @@index([status])
+  @@index([healthStatus])
+}
+
+model ProviderHealthLog {
+  id           String    @id @default(cuid())
+  providerId   String
+  checkType    String
+  status       String
+  latency      Int?
+  errorMessage String?
+  createdAt    DateTime  @default(now())
+
+  provider     Provider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([providerId, createdAt])
+}
+
+model Token {
+  id                 String                  @id @default(cuid())
+  userId             String
+  name               String
+  keyPrefix          String
+  keyHash            String                  @unique
+  keyEncrypted       String?
+  status             String                  @default("active")
+  rpmLimit           Int?
+  tpmLimit           Int?
+  ipRuleMode         String                  @default("allow_all")
+  quotaTokenLimit    Int?
+  quotaRequestLimit  Int?
+  quotaPeriod        String                  @default("monthly")
+  lastUsedAt         DateTime?
+  expiresAt          DateTime?
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  user               User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenProviders     TokenProvider[]
+  tokenIpRules       TokenIpRule[]
+  tokenDesensitizeRules TokenDesensitizeRule[]
+  auditLogs          AuditLog[]
+
+  @@index([keyHash])
+  @@index([userId, status])
+}
+
+model TokenProvider {
+  id         String    @id @default(cuid())
+  tokenId    String
+  providerId String
+  priority   Int       @default(1)
+  createdAt  DateTime  @default(now())
+
+  token      Token     @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  provider   Provider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([tokenId, providerId])
+  @@index([tokenId, priority])
+}
+
+model TokenIpRule {
+  id        String    @id @default(cuid())
+  tokenId   String
+  ruleType  String
+  ipCidr    String
+  createdAt DateTime  @default(now())
+
+  token     Token     @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  @@index([tokenId])
+}
+
+model UserProvider {
+  id         String    @id @default(cuid())
+  userId     String
+  providerId String
+  createdAt  DateTime  @default(now())
+
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider   Provider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, providerId])
+}
+
+model DesensitizeRule {
+  id          String                  @id @default(cuid())
+  userId      String?
+  tokenId     String?
+  name        String
+  scope       String                  @default("global")
+  ruleType    String
+  pattern     String
+  replacement String?
+  action      String                  @default("replace")
+  isEnabled   Boolean                 @default(true)
+  priority    Int                     @default(0)
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+
+  user        User?                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenRules  TokenDesensitizeRule[]
+
+  @@index([userId, scope])
+  @@index([scope, isEnabled])
+}
+
+model TokenDesensitizeRule {
+  id        String           @id @default(cuid())
+  tokenId   String
+  ruleId    String
+  createdAt DateTime         @default(now())
+
+  token     Token            @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  rule      DesensitizeRule  @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@unique([tokenId, ruleId])
+}
+
+model FailoverConfig {
+  id                     String    @id @default(cuid())
+  providerId             String    @unique
+  errorThresholdPercent  Int       @default(50)
+  errorWindowSeconds     Int       @default(60)
+  minRequestCount        Int       @default(5)
+  cooldownSeconds        Int       @default(30)
+  recoveryObserveSeconds Int       @default(300)
+  healthCheckEnabled     Boolean   @default(true)
+  healthCheckInterval    Int       @default(60)
+  healthCheckTimeout     Int       @default(10)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  provider               Provider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id                 String    @id @default(cuid())
+  userId             String?
+  tokenId            String?
+  providerId         String?
+  providerName       String?
+  logType            String
+  action             String
+  requestMethod      String?
+  requestBodyHash    String?
+  responseStatus     Int?
+  responseTime       Int?
+  promptTokens       Int?
+  completionTokens   Int?
+  totalTokens        Int?
+  isStream           Boolean   @default(false)
+  failover           Boolean   @default(false)
+  originalProviderId String?
+  ipAddress          String?
+  userAgent          String?
+  detail             String?
+  requestBody        String?
+  responseBody       String?
+  contentHash        String?
+  previousHash       String?
+  createdAt          DateTime  @default(now())
+
+  user               User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  token              Token?    @relation(fields: [tokenId], references: [id], onDelete: SetNull)
+  provider           Provider? @relation(fields: [providerId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([tokenId, createdAt])
+  @@index([logType, createdAt])
+  @@index([createdAt])
+}
+
+model AlertRule {
+  id               String     @id @default(cuid())
+  name             String
+  triggerCondition String
+  threshold        Int?
+  cooldown         Int        @default(300)
+  channels         String
+  recipientAdmins  Boolean    @default(true)
+  recipientUsers   Boolean    @default(false)
+  messageTemplate  String?
+  isEnabled        Boolean    @default(true)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  alertLogs        AlertLog[]
+}
+
+model AlertLog {
+  id         String    @id @default(cuid())
+  ruleId     String
+  level      String
+  title      String
+  message    String
+  recipients String?
+  status     String    @default("sent")
+  createdAt  DateTime  @default(now())
+
+  rule       AlertRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@index([ruleId, createdAt])
+  @@index([createdAt])
+}
+
+model QuotaSnapshot {
+  id           String   @id @default(cuid())
+  type         String
+  refId        String
+  period       String
+  usedTokens   Int      @default(0)
+  usedRequests Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user         User?    @relation(fields: [refId], references: [id], onDelete: Cascade)
+
+  @@unique([type, refId, period])
+  @@index([type, period])
+  @@index([refId])
+}
