@@ -145,34 +145,23 @@ const DB_VERSIONS = [
     },
     upgrade: async () => {
       if (!await hasColumn('User', 'status')) {
-        await prisma.$executeRawUnsafe(`
-          PRAGMA defer_foreign_keys=ON;
-          PRAGMA foreign_keys=OFF;
-          CREATE TABLE "new_User" (
-            "id" TEXT NOT NULL PRIMARY KEY,
-            "username" TEXT NOT NULL,
-            "name" TEXT,
-            "email" TEXT,
-            "password" TEXT NOT NULL,
-            "isAdmin" BOOLEAN NOT NULL DEFAULT false,
-            "status" TEXT NOT NULL DEFAULT 'active',
-            "quotaTokenLimit" INTEGER,
-            "quotaRequestLimit" INTEGER,
-            "quotaPeriod" TEXT NOT NULL DEFAULT 'monthly',
-            "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            "updatedAt" DATETIME NOT NULL
-          );
-          INSERT INTO "new_User" ("id", "username", "name", "email", "password", "isAdmin", "createdAt", "updatedAt")
-          SELECT "id", "username", "name", "email", "password", "isAdmin", "createdAt", "updatedAt" FROM "User";
-          DROP TABLE "User";
-          ALTER TABLE "new_User" RENAME TO "User";
-          CREATE UNIQUE INDEX "User_username_key" ON "User"("username");
-          CREATE INDEX "User_status_idx" ON "User"("status");
-          CREATE INDEX "User_isAdmin_idx" ON "User"("isAdmin");
-          PRAGMA foreign_keys=ON;
-          PRAGMA defer_foreign_keys=OFF;
-        `);
+        await prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD COLUMN "status" TEXT NOT NULL DEFAULT 'active';`);
       }
+      if (!await hasColumn('User', 'quotaTokenLimit')) {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD COLUMN "quotaTokenLimit" INTEGER;`);
+      }
+      if (!await hasColumn('User', 'quotaRequestLimit')) {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD COLUMN "quotaRequestLimit" INTEGER;`);
+      }
+      if (!await hasColumn('User', 'quotaPeriod')) {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD COLUMN "quotaPeriod" TEXT NOT NULL DEFAULT 'monthly';`);
+      }
+      try {
+        await prisma.$executeRawUnsafe(`CREATE INDEX "User_status_idx" ON "User"("status");`);
+      } catch (_) {}
+      try {
+        await prisma.$executeRawUnsafe(`CREATE INDEX "User_isAdmin_idx" ON "User"("isAdmin");`);
+      } catch (_) {}
     }
   },
   {
