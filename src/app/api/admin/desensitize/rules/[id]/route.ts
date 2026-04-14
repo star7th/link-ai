@@ -25,7 +25,6 @@ export async function GET(
 
   const rule = await prisma.desensitizeRule.findUnique({
     where: { id },
-    include: { template: true },
   });
 
   if (!rule) {

@@ -27,7 +27,6 @@ export async function GET(request: NextRequest) {
 
   const rules = await prisma.desensitizeRule.findMany({
     where,
-    include: { template: true },
     orderBy: [{ scope: 'asc' }, { priority: 'desc' }],
   });
 
@@ -39,7 +38,7 @@ export async function POST(request: NextRequest) {
   if (authError) return authError;
 
   const body = await request.json();
-  const { name, ruleType, pattern, replacement, action, scope, isEnabled, priority, templateId } = body;
+  const { name, ruleType, pattern, replacement, action, scope, isEnabled, priority } = body;
 
   if (!name || !ruleType || !pattern) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -56,7 +55,6 @@ export async function POST(request: NextRequest) {
         scope: scope || 'global',
         isEnabled: isEnabled !== false,
         priority: priority || 0,
-        templateId,
       },
     });
     await desensitizeEngine.reloadRules();
