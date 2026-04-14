@@ -43,7 +43,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
             
       - name: Build and push
         uses: docker/build-push-action@v4
@@ -57,7 +57,7 @@ jobs:
           
       - name: Extract metadata for ARM Docker
         id: meta-arm
-        if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+        if: (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && github.event_name != 'pull_request'
         uses: docker/metadata-action@v4
         with:
           images: star7th/link-ai
@@ -65,7 +65,7 @@ jobs:
             type=raw,value=arm-latest
             
       - name: Build and push ARM version
-        if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+        if: (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && github.event_name != 'pull_request'
         uses: docker/build-push-action@v4
         with:
           context: .
