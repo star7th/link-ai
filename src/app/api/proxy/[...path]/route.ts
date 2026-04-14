@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma, proxyEngine, hashToken, rateLimiter, quotaEngine, auditLogger, circuitBreaker, alertEngine } from '@/lib/engines';
+import { applyModelRedirect } from '@/lib/proxy/engine';
 import { desensitizeEngine } from '@/lib/desensitize/engine';
 import { createStreamProxy, extractStreamUsage, extractReadableText } from '@/lib/proxy/stream';
 import { setupProviderConfigs } from '@/lib/proxy/engine';
@@ -490,6 +491,8 @@ async function handleRequest(
         const apiKey = decrypt(tp.provider.apiKeyEncrypted);
         const url = resolveProxyUrl(tp.provider.apiBaseUrl, path);
 
+        const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
+
         const headers: Record<string, string> = {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
@@ -501,7 +504,7 @@ async function handleRequest(
           const upstream = await fetch(url, {
             method: request.method,
             headers,
-            body: JSON.stringify(body)
+            body: JSON.stringify(redirectedBody)
           });
 
           if (upstream.ok && upstream.body) {

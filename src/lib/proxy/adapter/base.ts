@@ -52,10 +52,12 @@ export function resolveProxyUrl(apiBaseUrl: string, requestPath: string): string
       const remaining = requestPath.slice(basePath.length) || '/';
       url.pathname = basePath + remaining;
     } else {
-      // Base URL has a path (e.g. /api/paas/v4) that doesn't match requestPath prefix (/v1/...)
-      // Strip the /v1/ from requestPath and append the rest
-      const stripped = requestPath.replace(/^\/v1\//, '/');
-      url.pathname = basePath + stripped;
+      if (/\/v\d+$/.test(basePath)) {
+        const stripped = requestPath.replace(/^\/v1\//, '/');
+        url.pathname = basePath + stripped;
+      } else {
+        url.pathname = basePath + requestPath;
+      }
     }
     return url.toString();
   } catch {

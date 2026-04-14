@@ -9,6 +9,19 @@ import { circuitBreaker } from '@/lib/failover/circuit-breaker';
 import { rateLimiter } from '@/lib/rate-limit';
 import { quotaEngine } from '@/lib/quota/engine';
 
+export function applyModelRedirect(body: any, modelRedirectStr: string | null): any {
+  if (!body || !body.model || !modelRedirectStr) return body;
+  try {
+    const rules: Array<{ from: string; to: string }> = JSON.parse(modelRedirectStr);
+    if (!Array.isArray(rules)) return body;
+    const match = rules.find(r => r.from === body.model);
+    if (match) {
+      return { ...body, model: match.to };
+    }
+  } catch {}
+  return body;
+}
+
 export class ProxyEngine {
   private adapterMap = new Map<string, new (p: ProviderConfig) => any>();
 
@@ -41,7 +54,7 @@ export class ProxyEngine {
     }
   }
 
-  private async getProvidersForToken(tokenHash: string): Promise<Array<{ id: string; apiBaseUrl: string; apiKeyEncrypted: string; protocolType: string; name: string }>> {
+  private async getProvidersForToken(tokenHash: string): Promise<Array<{ id: string; apiBaseUrl: string; apiKeyEncrypted: string; protocolType: string; name: string; modelRedirect?: string | null }>> {
     const token = await prisma.token.findUnique({
       where: { keyHash: tokenHash },
       include: {
@@ -62,7 +75,8 @@ export class ProxyEngine {
         apiBaseUrl: tp.provider.apiBaseUrl,
         apiKeyEncrypted: tp.provider.apiKeyEncrypted,
         protocolType: tp.provider.protocolType,
-        name: tp.provider.name
+        name: tp.provider.name,
+        modelRedirect: tp.provider.modelRedirect
       }));
     }
 
@@ -75,7 +89,8 @@ export class ProxyEngine {
       apiBaseUrl: p.apiBaseUrl,
       apiKeyEncrypted: p.apiKeyEncrypted,
       protocolType: p.protocolType,
-      name: p.name
+      name: p.name,
+      modelRedirect: p.modelRedirect
     }));
   }
 
@@ -161,7 +176,7 @@ export class ProxyEngine {
   }
 
   private async forwardToProvider(
-    provider: { id: string; apiBaseUrl: string; apiKeyEncrypted: string; protocolType: string; name: string },
+    provider: { id: string; apiBaseUrl: string; apiKeyEncrypted: string; protocolType: string; name: string; modelRedirect?: string | null },
     path: string,
     method: string,
     headers: Record<string, string>,
@@ -170,12 +185,14 @@ export class ProxyEngine {
     const AdapterClass = this.adapterMap.get(provider.protocolType) || OpenAIAdapter;
     const adapter = new AdapterClass(provider as ProviderConfig);
 
+    const redirectedBody = applyModelRedirect(body, provider.modelRedirect || null);
+
     const request: ProxyRequest = {
       provider: provider as ProviderConfig,
       path,
       method,
       headers,
-      body
+      body: redirectedBody
     };
 
     return adapter.forward(request);

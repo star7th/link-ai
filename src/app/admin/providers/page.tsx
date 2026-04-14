@@ -18,6 +18,7 @@ interface Provider {
   healthStatus: string;
   totalRpmLimit: number | null;
   totalTpmLimit: number | null;
+  modelRedirect: string | null;
   createdAt: string;
 }
 
@@ -28,6 +29,11 @@ interface ProvidersResponse {
   totalPages: number;
 }
 
+interface ModelRedirectRule {
+  from: string;
+  to: string;
+}
+
 interface CreateProviderForm {
   name: string;
   code: string;
@@ -36,6 +42,7 @@ interface CreateProviderForm {
   apiKey: string;
   totalRpmLimit: string;
   totalTpmLimit: string;
+  modelRedirectRules: ModelRedirectRule[];
 }
 
 interface EditProviderForm {
@@ -45,6 +52,7 @@ interface EditProviderForm {
   apiKey: string;
   totalRpmLimit: string;
   totalTpmLimit: string;
+  modelRedirectRules: ModelRedirectRule[];
 }
 
 interface TestResult {
@@ -61,6 +69,22 @@ const PROTOCOL_TYPES = [
   { value: "dashscope", label: "DashScope" },
   { value: "custom", label: "Custom" },
 ];
+
+function parseModelRedirect(json: string | null): ModelRedirectRule[] {
+  if (!json) return [];
+  try {
+    const arr = JSON.parse(json);
+    if (Array.isArray(arr)) return arr;
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function serializeModelRedirect(rules: ModelRedirectRule[]): string | null {
+  const filtered = rules.filter(r => r.from.trim() && r.to.trim());
+  return filtered.length > 0 ? JSON.stringify(filtered) : null;
+}
 
 function HealthBadge({ status }: { status: string }) {
   const config: Record<string, { bg: string; text: string; label: string }> = {
@@ -174,6 +198,67 @@ function TestResultModal({
   return createPortal(modal, document.body);
 }
 
+function ModelRedirectEditor({
+  rules,
+  onChange,
+}: {
+  rules: ModelRedirectRule[];
+  onChange: (rules: ModelRedirectRule[]) => void;
+}) {
+  const addRule = () => {
+    onChange([...rules, { from: "", to: "" }]);
+  };
+
+  const removeRule = (index: number) => {
+    onChange(rules.filter((_, i) => i !== index));
+  };
+
+  const updateRule = (index: number, field: "from" | "to", value: string) => {
+    const updated = [...rules];
+    updated[index] = { ...updated[index], [field]: value };
+    onChange(updated);
+  };
+
+  return (
+    <div className="space-y-2">
+      {rules.map((rule, index) => (
+        <div key={index} className="flex items-center gap-2">
+          <Input
+            value={rule.from}
+            onChange={(e) => updateRule(index, "from", e.target.value)}
+            placeholder="请求模型名"
+            className="flex-1"
+          />
+          <span className="text-muted-foreground text-sm shrink-0">→</span>
+          <Input
+            value={rule.to}
+            onChange={(e) => updateRule(index, "to", e.target.value)}
+            placeholder="重写为"
+            className="flex-1"
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="text-error hover:text-error shrink-0"
+            onClick={() => removeRule(index)}
+          >
+            删除
+          </Button>
+        </div>
+      ))}
+      <Button type="button" variant="outline" size="sm" onClick={addRule}>
+        + 添加映射
+      </Button>
+      {rules.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          当客户端请求左侧模型时，将自动替换为右侧模型名发送给上游
+        </p>
+      )}
+    </div>
+  );
+}
+
 function CreateProviderModal({
   isOpen,
   onClose,
@@ -191,10 +276,12 @@ function CreateProviderModal({
     apiKey: "",
     totalRpmLimit: "",
     totalTpmLimit: "",
+    modelRedirectRules: [],
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [mounted, setMounted] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -227,6 +314,8 @@ function CreateProviderModal({
       };
       if (form.totalRpmLimit) body.totalRpmLimit = Number(form.totalRpmLimit);
       if (form.totalTpmLimit) body.totalTpmLimit = Number(form.totalTpmLimit);
+      const modelRedirect = serializeModelRedirect(form.modelRedirectRules);
+      if (modelRedirect) body.modelRedirect = modelRedirect;
       const res = await fetch("/api/admin/providers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -244,6 +333,7 @@ function CreateProviderModal({
         apiKey: "",
         totalRpmLimit: "",
         totalTpmLimit: "",
+        modelRedirectRules: [],
       });
       onSuccess();
       onClose();
@@ -347,6 +437,27 @@ function CreateProviderModal({
                 />
               </div>
             </div>
+            <div className="border-t border-primary/15 pt-3">
+              <button
+                type="button"
+                className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-light-text-primary dark:hover:text-dark-text-primary transition-colors"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+              >
+                <span className={`transition-transform ${showAdvanced ? "rotate-90" : ""}`}>▶</span>
+                高级设置
+              </button>
+              {showAdvanced && (
+                <div className="mt-3 space-y-3">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">模型重定向</label>
+                    <ModelRedirectEditor
+                      rules={form.modelRedirectRules}
+                      onChange={(rules) => setForm({ ...form, modelRedirectRules: rules })}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
             {error && <p className="text-sm text-error">{error}</p>}
             <div className="flex justify-end space-x-3 pt-2">
               <Button type="button" variant="outline" onClick={onClose}>
@@ -383,10 +494,12 @@ function EditProviderModal({
     apiKey: "",
     totalRpmLimit: "",
     totalTpmLimit: "",
+    modelRedirectRules: [],
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [mounted, setMounted] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -401,8 +514,10 @@ function EditProviderModal({
         apiKey: "",
         totalRpmLimit: provider.totalRpmLimit?.toString() ?? "",
         totalTpmLimit: provider.totalTpmLimit?.toString() ?? "",
+        modelRedirectRules: parseModelRedirect(provider.modelRedirect),
       });
       setError("");
+      setShowAdvanced(!!provider.modelRedirect);
     }
   }, [isOpen, provider]);
 
@@ -429,6 +544,7 @@ function EditProviderModal({
       if (form.apiKey.trim()) body.apiKey = form.apiKey;
       if (form.totalRpmLimit) body.totalRpmLimit = Number(form.totalRpmLimit);
       if (form.totalTpmLimit) body.totalTpmLimit = Number(form.totalTpmLimit);
+      body.modelRedirect = serializeModelRedirect(form.modelRedirectRules);
       const res = await fetch(`/api/admin/providers/${provider.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -519,6 +635,27 @@ function EditProviderModal({
                   placeholder="0"
                 />
               </div>
+            </div>
+            <div className="border-t border-primary/15 pt-3">
+              <button
+                type="button"
+                className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-light-text-primary dark:hover:text-dark-text-primary transition-colors"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+              >
+                <span className={`transition-transform ${showAdvanced ? "rotate-90" : ""}`}>▶</span>
+                高级设置
+              </button>
+              {showAdvanced && (
+                <div className="mt-3 space-y-3">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">模型重定向</label>
+                    <ModelRedirectEditor
+                      rules={form.modelRedirectRules}
+                      onChange={(rules) => setForm({ ...form, modelRedirectRules: rules })}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
             {error && <p className="text-sm text-error">{error}</p>}
             <div className="flex justify-end space-x-3 pt-2">

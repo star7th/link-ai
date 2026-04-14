@@ -584,6 +584,18 @@ const DB_VERSIONS = [
         await prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" ADD COLUMN "desensitizeHits" TEXT;`);
       }
     }
+  },
+  {
+    version: 15,
+    name: '提供商增加模型重定向字段',
+    check: async () => {
+      return await hasColumn('Provider', 'modelRedirect');
+    },
+    upgrade: async () => {
+      if (!await hasColumn('Provider', 'modelRedirect')) {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "Provider" ADD COLUMN "modelRedirect" TEXT;`);
+      }
+    }
   }
 ];
 
