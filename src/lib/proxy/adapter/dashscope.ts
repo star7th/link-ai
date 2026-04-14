@@ -57,7 +57,7 @@ export class DashScopeAdapter extends BaseAdapter {
     const response = await fetch(url, {
       method: request.method,
       headers: {
-        ...request.headers,
+        ...Object.fromEntries(Object.entries(request.headers).filter(([k]) => k !== 'content-type')),
         'Authorization': this.getAuthorizationHeader(),
         'Content-Type': 'application/json'
       },

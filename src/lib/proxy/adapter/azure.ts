@@ -1,4 +1,4 @@
-import { BaseAdapter, ProxyRequest, ProxyResponse } from './base';
+import { BaseAdapter, ProxyRequest, ProxyResponse, resolveProxyUrl } from './base';
 
 export class AzureAdapter extends BaseAdapter {
   protected getAuthorizationHeader(): string {
@@ -6,11 +6,7 @@ export class AzureAdapter extends BaseAdapter {
   }
 
   protected buildUrl(path: string): string {
-    let baseUrl = this.provider.apiBaseUrl;
-    if (baseUrl.endsWith('/')) {
-      baseUrl = baseUrl.slice(0, -1);
-    }
-    return `${baseUrl}${path}`;
+    return resolveProxyUrl(this.provider.apiBaseUrl, path);
   }
 
   private adaptResponse(response: any): any {
@@ -20,8 +16,9 @@ export class AzureAdapter extends BaseAdapter {
 
   async forward(request: ProxyRequest): Promise<ProxyResponse> {
     const url = this.buildUrl(request.path);
+    const { 'content-type': _ct, ...restHeaders } = request.headers;
     const headers = {
-      ...request.headers,
+      ...restHeaders,
       'api-key': this.apiKey,
       'Content-Type': 'application/json'
     };

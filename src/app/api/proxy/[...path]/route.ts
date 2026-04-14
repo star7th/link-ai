@@ -3,6 +3,7 @@ import { prisma, proxyEngine, hashToken, rateLimiter, quotaEngine, auditLogger, 
 import { desensitizeEngine } from '@/lib/desensitize/engine';
 import { createStreamProxy, extractStreamUsage, extractReadableText } from '@/lib/proxy/stream';
 import { setupProviderConfigs } from '@/lib/proxy/engine';
+import { resolveProxyUrl } from '@/lib/proxy/adapter/base';
 import { decrypt } from '@/lib/crypto';
 import { isAuditLogFullBodyEnabled } from '@/lib/system-config';
 
@@ -487,7 +488,7 @@ async function handleRequest(
         }
 
         const apiKey = decrypt(tp.provider.apiKeyEncrypted);
-        const url = tp.provider.apiBaseUrl.replace(/\/$/, '') + path;
+        const url = resolveProxyUrl(tp.provider.apiBaseUrl, path);
 
         const headers: Record<string, string> = {
           'Authorization': `Bearer ${apiKey}`,

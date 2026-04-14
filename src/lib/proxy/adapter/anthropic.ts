@@ -63,8 +63,9 @@ export class AnthropicAdapter extends BaseAdapter {
     const url = this.buildUrl(request.path);
     const adaptedBody = this.adaptRequestBody(request.body);
 
+    const { 'content-type': _ct, ...restHeaders } = request.headers;
     const headers = {
-      ...request.headers,
+      ...restHeaders,
       'x-api-key': this.apiKey,
       'anthropic-version': '2023-06-01',
       'Content-Type': 'application/json'
