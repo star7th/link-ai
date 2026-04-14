@@ -15,9 +15,12 @@ export const healthChecker = {
 
     try {
       const apiKey = decrypt(provider.apiKeyEncrypted);
-      let url = provider.apiBaseUrl;
-      if (!url.endsWith('/')) url += '/';
-      url += 'v1/models';
+      let url = provider.apiBaseUrl.replace(/\/+$/, '');
+      if (/\/v\d+$/.test(url)) {
+        url += '/models';
+      } else {
+        url += '/v1/models';
+      }
 
       const response = await fetch(url, {
         method: 'GET',

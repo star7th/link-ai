@@ -7,6 +7,16 @@ import { buildAuthOptions } from '@/app/api/auth/[...nextauth]/route';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+function buildModelsUrl(baseUrl: string): string {
+  let url = baseUrl.replace(/\/+$/, '');
+  if (/\/v\d+$/.test(url)) {
+    url += '/models';
+  } else {
+    url += '/v1/models';
+  }
+  return url;
+}
+
 async function requireAdmin(request: NextRequest) {
   const session = await getServerSession(await buildAuthOptions());
   if (!session || !((session as any).user?.isAdmin)) {
@@ -41,7 +51,8 @@ export async function POST(
       headers['Authorization'] = `Bearer ${apiKey}`;
     }
 
-    const response = await fetch(`${provider.apiBaseUrl}/v1/models`, {
+    const modelsUrl = buildModelsUrl(provider.apiBaseUrl);
+    const response = await fetch(modelsUrl, {
       headers,
       signal: AbortSignal.timeout(10000),
     });
