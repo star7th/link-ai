@@ -166,7 +166,7 @@ export default function AdminAuditLogsPage() {
   const [loading, setLoading] = useState(true);
   const [fullBodyEnabled, setFullBodyEnabled] = useState(false);
   const [detailLog, setDetailLog] = useState<AuditLog | null>(null);
-  const limit = 50;
+  const limit = 10;
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
