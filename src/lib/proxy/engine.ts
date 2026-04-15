@@ -5,6 +5,7 @@ import { AzureAdapter } from '@/lib/proxy/adapter/azure';
 import { DashScopeAdapter } from '@/lib/proxy/adapter/dashscope';
 import { CustomAdapter } from '@/lib/proxy/adapter/custom';
 import { ProviderConfig, ProxyRequest, ProxyResponse } from '@/lib/proxy/adapter/base';
+import { resolveTimeout } from '@/lib/proxy/timeout';
 import { circuitBreaker } from '@/lib/failover/circuit-breaker';
 import { restoreState } from '@/lib/failover/circuit-breaker';
 import { rateLimiter } from '@/lib/rate-limit';
@@ -55,7 +56,7 @@ export class ProxyEngine {
     }
   }
 
-  private async getProvidersForToken(tokenHash: string): Promise<Array<{ id: string; apiBaseUrl: string; apiKeyEncrypted: string; protocolType: string; name: string; modelRedirect?: string | null }>> {
+  private async getProvidersForToken(tokenHash: string): Promise<Array<{ id: string; apiBaseUrl: string; apiKeyEncrypted: string; protocolType: string; name: string; modelRedirect?: string | null; timeoutMs?: number | null; streamTimeoutMs?: number | null }>> {
     const token = await prisma.token.findUnique({
       where: { keyHash: tokenHash },
       include: {
@@ -77,7 +78,9 @@ export class ProxyEngine {
         apiKeyEncrypted: tp.provider.apiKeyEncrypted,
         protocolType: tp.provider.protocolType,
         name: tp.provider.name,
-        modelRedirect: tp.provider.modelRedirect
+        modelRedirect: tp.provider.modelRedirect,
+        timeoutMs: tp.provider.timeoutMs,
+        streamTimeoutMs: tp.provider.streamTimeoutMs,
       }));
     }
 
@@ -91,7 +94,9 @@ export class ProxyEngine {
       apiKeyEncrypted: p.apiKeyEncrypted,
       protocolType: p.protocolType,
       name: p.name,
-      modelRedirect: p.modelRedirect
+      modelRedirect: p.modelRedirect,
+      timeoutMs: p.timeoutMs,
+      streamTimeoutMs: p.streamTimeoutMs,
     }));
   }
 
@@ -108,7 +113,7 @@ export class ProxyEngine {
       throw new Error('No active providers configured for this token');
     }
 
-    // Single provider: no failover needed, use longer timeout (2 min)
+    // Single provider: no failover needed, compute timeout dynamically
     if (providers.length === 1) {
       const provider = providers[0];
       await this.setupProviderConfig(provider.id);
@@ -117,7 +122,9 @@ export class ProxyEngine {
       // Skip circuit breaker check for single provider — no backup to switch to
       // but still record success/failure for observability
       try {
-        const response = await this.forwardToProvider(provider, path, method, headers, body, 120000);
+        const bodySize = body ? new Blob([JSON.stringify(body)]).size : 0;
+        const timeoutMs = resolveTimeout(provider.timeoutMs, provider.streamTimeoutMs, bodySize, false);
+        const response = await this.forwardToProvider(provider, path, method, headers, body, timeoutMs);
         if (response.status >= 200 && response.status < 300) {
           circuitBreaker.recordSuccess(provider.id, provider.name);
           if (providerConfig?.totalRpmLimit) {
@@ -204,7 +211,7 @@ export class ProxyEngine {
   }
 
   private async forwardToProvider(
-    provider: { id: string; apiBaseUrl: string; apiKeyEncrypted: string; protocolType: string; name: string; modelRedirect?: string | null },
+    provider: { id: string; apiBaseUrl: string; apiKeyEncrypted: string; protocolType: string; name: string; modelRedirect?: string | null; timeoutMs?: number | null; streamTimeoutMs?: number | null },
     path: string,
     method: string,
     headers: Record<string, string>,

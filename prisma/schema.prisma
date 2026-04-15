@@ -126,6 +126,8 @@ model Provider {
   healthStatus    String              @default("unknown")
   lastHealthCheck DateTime?
   modelRedirect   String?
+  timeoutMs       Int?
+  streamTimeoutMs Int?
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
 

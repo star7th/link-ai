@@ -140,10 +140,11 @@ export async function bufferUpstreamStream(
   let bufferedText = '';
   let chunkCount = 0;
   let settled = false;
-  let resolveSettle: (() => void) | null = null;
+  let _resolveSettle: (() => void) | null = null;
   let upstreamDone = false;
   let upstreamError: Error | null = null;
   let readLoopFinished = false;
+  const resolveSettle = () => _resolveSettle?.();
 
   // Settle when timeout or min chunks reached
   const timer = setTimeout(() => {
@@ -194,7 +195,7 @@ export async function bufferUpstreamStream(
   // Wait for settle condition
   if (!settled) {
     await new Promise<void>((resolve) => {
-      resolveSettle = resolve;
+      _resolveSettle = resolve;
     });
   }
 

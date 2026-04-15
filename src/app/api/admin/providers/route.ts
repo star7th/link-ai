@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
   if (authError) return authError;
 
   const body = await request.json();
-  const { name, code, protocolType, apiBaseUrl, apiKey, totalRpmLimit, totalTpmLimit, modelRedirect } = body;
+  const { name, code, protocolType, apiBaseUrl, apiKey, totalRpmLimit, totalTpmLimit, modelRedirect, timeoutMs, streamTimeoutMs } = body;
 
   if (!name || !code || !protocolType || !apiBaseUrl || !apiKey) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -69,7 +69,9 @@ export async function POST(request: NextRequest) {
         apiKeyEncrypted,
         totalRpmLimit,
         totalTpmLimit,
-        modelRedirect: modelRedirect || null
+        modelRedirect: modelRedirect || null,
+        timeoutMs: timeoutMs ? Number(timeoutMs) : null,
+        streamTimeoutMs: streamTimeoutMs ? Number(streamTimeoutMs) : null,
       }
     });
 

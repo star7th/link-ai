@@ -36,7 +36,7 @@ const defaultConfig: CircuitBreakerConfig = {
   recoveryObserveSeconds: 300
 };
 
-export function setStateChangeCallback(callback: StateChangeCallback) {
+export function setStateChangeCallback(callback: StateChangeCallback | null) {
   stateChangeCallback = callback;
 }
 

@@ -17,7 +17,7 @@ export async function POST(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  const existing = await prisma.token.findFirst({ where: { id: Number(id) } });
+  const existing = await prisma.token.findFirst({ where: { id } });
   if (!existing) {
     return NextResponse.json({ error: 'Token not found' }, { status: 404 });
   }
@@ -28,7 +28,7 @@ export async function POST(
   const keyEncrypted = encrypt(apiKey);
 
   await prisma.token.update({
-    where: { id: Number(id) },
+    where: { id },
     data: { keyPrefix, keyHash, keyEncrypted },
   });
 
