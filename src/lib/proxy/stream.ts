@@ -8,59 +8,99 @@
  *
  * This transform inserts the missing `\n\n` so clients parse events correctly.
  * Well-formed SSE (already separated by `\n\n`) passes through unchanged.
- *
- * Implementation: line-based processing. Only checks if a line STARTS with a SSE
- * field keyword, so `data:` inside JSON string values won't cause false matches.
  */
 export function normalizeSSEStream(): TransformStream<Uint8Array, Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   let buf = '';
-  let prevLineWasBlank = true; // Start true so first event gets no extra separator
 
   return new TransformStream({
     transform(chunk, controller) {
       buf += decoder.decode(chunk, { stream: true });
-      processLines(controller, false);
+      flush(controller, false);
     },
     flush(controller) {
-      processLines(controller, true);
+      flush(controller, true);
     },
   });
 
-  function processLines(controller: TransformStreamDefaultController<Uint8Array>, final: boolean) {
-    let newlineIdx: number;
-    while ((newlineIdx = buf.indexOf('\n')) !== -1) {
-      const line = buf.substring(0, newlineIdx);
-      buf = buf.substring(newlineIdx + 1);
-
-      if (line === '') {
-        // Blank line — this is the SSE event separator
-        prevLineWasBlank = true;
-        controller.enqueue(encoder.encode('\n'));
-        continue;
-      }
-
-      const isSSEField = /^(data|event|id|retry|:)\b/.test(line);
-
-      if (isSSEField && !prevLineWasBlank) {
-        // Missing blank line separator before this event — insert one
-        controller.enqueue(encoder.encode('\n\n'));
-      }
-
-      prevLineWasBlank = false;
-      controller.enqueue(encoder.encode(line + '\n'));
+  /**
+   * Find all indices where `data:` starts in `text`.
+   * Matches regardless of preceding character (start-of-string, \n, or anything else).
+   */
+  function findDataPositions(text: string): number[] {
+    const positions: number[] = [];
+    let idx = 0;
+    while (idx < text.length) {
+      const found = text.indexOf('data:', idx);
+      if (found === -1) break;
+      positions.push(found);
+      idx = found + 5; // skip past 'data:'
     }
+    return positions;
+  }
 
-    // On final flush, emit any remaining partial line
-    if (final && buf) {
-      const isSSEField = /^(data|event|id|retry|:)\b/.test(buf);
-      if (isSSEField && !prevLineWasBlank) {
-        controller.enqueue(encoder.encode('\n\n'));
-      }
-      controller.enqueue(encoder.encode(buf));
+  function flush(controller: TransformStreamDefaultController<Uint8Array>, isFinal: boolean) {
+    if (buf.length === 0) return;
+
+    // buf may contain already-normalized text from previous rounds plus new raw text.
+    // insertMissingSeparators is idempotent on already-normalized text, so always safe.
+    const normalized = insertMissingSeparators(buf);
+    buf = normalized; // Store normalized text back for next round
+
+    if (!isFinal) {
+      // Find last complete SSE event boundary (\n\n)
+      const lastBoundary = normalized.lastIndexOf('\n\n');
+      if (lastBoundary === -1) return; // No complete event yet, keep buffering
+
+      const toEmit = normalized.substring(0, lastBoundary + 2);
+      buf = normalized.substring(lastBoundary + 2);
+      controller.enqueue(encoder.encode(toEmit));
+    } else {
+      // Final flush: emit everything remaining
+      controller.enqueue(encoder.encode(normalized));
       buf = '';
     }
+  }
+
+  /**
+   * Walk through the text and ensure every `data:` (except the very first one)
+   * is preceded by `\n\n`. If not, insert the missing newline(s).
+   */
+  function insertMissingSeparators(text: string): string {
+    const positions = findDataPositions(text);
+    if (positions.length <= 1) return text;
+
+    let result = '';
+    let lastIdx = 0;
+
+    for (let i = 0; i < positions.length; i++) {
+      const dataIdx = positions[i];
+
+      if (i === 0) {
+        // First data: — just copy up to it (usually position 0, but handle BOM etc.)
+        result += text.substring(lastIdx, dataIdx);
+      } else {
+        // Check what's between last data: end and this data:
+        const gap = text.substring(lastIdx, dataIdx);
+        if (gap.endsWith('\n\n')) {
+          // Already has proper separator
+          result += gap;
+        } else if (gap.endsWith('\n')) {
+          // Has \n but not \n\n — add one more
+          result += gap + '\n';
+        } else {
+          // No newline at all (concatenated events) — add \n\n
+          result += gap + '\n\n';
+        }
+      }
+
+      lastIdx = dataIdx;
+    }
+
+    // Append remaining text after the last data:
+    result += text.substring(lastIdx);
+    return result;
   }
 }
 
