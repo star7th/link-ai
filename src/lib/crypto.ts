@@ -52,6 +52,6 @@ export function hashToken(token: string): string {
 }
 
 export function generateApiKey(): string {
-  const bytes = randomBytes(24);
-  return `lk-${bytes.toString("base64url").slice(0, 32)}`;
+  const bytes = randomBytes(32);
+  return `lk-${bytes.toString("base64url")}`;
 }
