@@ -24,73 +24,58 @@ export function normalizeSSEStream(): TransformStream<Uint8Array, Uint8Array> {
     },
   });
 
-  /**
-   * Find all indices where `data:` starts in `text`.
-   * Matches regardless of preceding character (start-of-string, \n, or anything else).
-   */
-  function findDataPositions(text: string): number[] {
-    const positions: number[] = [];
-    let idx = 0;
-    while (idx < text.length) {
-      const found = text.indexOf('data:', idx);
-      if (found === -1) break;
-      positions.push(found);
-      idx = found + 5; // skip past 'data:'
-    }
-    return positions;
-  }
-
   function flush(controller: TransformStreamDefaultController<Uint8Array>, isFinal: boolean) {
     if (buf.length === 0) return;
 
-    // buf may contain already-normalized text from previous rounds plus new raw text.
-    // insertMissingSeparators is idempotent on already-normalized text, so always safe.
     const normalized = insertMissingSeparators(buf);
-    buf = normalized; // Store normalized text back for next round
+    buf = normalized;
 
     if (!isFinal) {
-      // Find last complete SSE event boundary (\n\n)
       const lastBoundary = normalized.lastIndexOf('\n\n');
-      if (lastBoundary === -1) return; // No complete event yet, keep buffering
+      if (lastBoundary === -1) return;
 
       const toEmit = normalized.substring(0, lastBoundary + 2);
       buf = normalized.substring(lastBoundary + 2);
       controller.enqueue(encoder.encode(toEmit));
     } else {
-      // Final flush: emit everything remaining
-      controller.enqueue(encoder.encode(normalized));
+      if (normalized.length > 0) {
+        controller.enqueue(encoder.encode(normalized));
+      }
       buf = '';
     }
   }
 
   /**
-   * Walk through the text and ensure every `data:` (except the very first one)
-   * is preceded by `\n\n`. If not, insert the missing newline(s).
+   * Only match `data:` that appears at the start of a line (preceded by
+   * start-of-string or \n).  This avoids false positives when the JSON
+   * payload itself contains the substring "data:".
    */
   function insertMissingSeparators(text: string): string {
-    const positions = findDataPositions(text);
-    if (positions.length <= 1) return text;
-
     let result = '';
     let lastIdx = 0;
+
+    const linePattern = /(?:^|\n)(data:)/g;
+    let match: RegExpExecArray | null;
+    const positions: number[] = [];
+
+    while ((match = linePattern.exec(text)) !== null) {
+      positions.push(match.index + (match[0].length - 5));
+    }
+
+    if (positions.length <= 1) return text;
 
     for (let i = 0; i < positions.length; i++) {
       const dataIdx = positions[i];
 
       if (i === 0) {
-        // First data: — just copy up to it (usually position 0, but handle BOM etc.)
         result += text.substring(lastIdx, dataIdx);
       } else {
-        // Check what's between last data: end and this data:
         const gap = text.substring(lastIdx, dataIdx);
         if (gap.endsWith('\n\n')) {
-          // Already has proper separator
           result += gap;
         } else if (gap.endsWith('\n')) {
-          // Has \n but not \n\n — add one more
           result += gap + '\n';
         } else {
-          // No newline at all (concatenated events) — add \n\n
           result += gap + '\n\n';
         }
       }
@@ -98,7 +83,6 @@ export function normalizeSSEStream(): TransformStream<Uint8Array, Uint8Array> {
       lastIdx = dataIdx;
     }
 
-    // Append remaining text after the last data:
     result += text.substring(lastIdx);
     return result;
   }
@@ -159,6 +143,7 @@ export async function bufferUpstreamStream(
   let resolveSettle: (() => void) | null = null;
   let upstreamDone = false;
   let upstreamError: Error | null = null;
+  let readLoopFinished = false;
 
   // Settle when timeout or min chunks reached
   const timer = setTimeout(() => {
@@ -174,10 +159,11 @@ export async function bufferUpstreamStream(
     }
   }
 
-  // Start reading upstream in the background
-  const readLoop = (async () => {
+  // Start reading upstream in the background — stops reading once settled
+  // so that pull() becomes the sole consumer of the reader afterwards.
+  const readLoopPromise = (async () => {
     try {
-      while (true) {
+      while (!settled) {
         const { done, value } = await reader.read();
         if (done) {
           upstreamDone = true;
@@ -200,6 +186,8 @@ export async function bufferUpstreamStream(
         clearTimeout(timer);
         resolveSettle?.();
       }
+    } finally {
+      readLoopFinished = true;
     }
   })();
 
@@ -210,22 +198,24 @@ export async function bufferUpstreamStream(
     });
   }
 
+  // Ensure the read loop has fully exited before we hand the reader to pull()
+  await readLoopPromise;
+
   // If upstream errored during buffering → failover
   if (upstreamError) {
     reader.cancel();
     return null;
   }
 
-  // If upstream finished during buffering (short response / error body)
-  // Check if we got any real SSE data
-  if (upstreamDone) {
-    // Even if upstream is done, we still have buffered data to send
-  }
+  // Snapshot the buffered data for the caller (used in onDone for stats)
+  const snapshotChunks = [...bufferedChunks];
+  const snapshotText = bufferedText;
 
   // Create a live ReadableStream that first drains the buffer, then continues reading
+  // This is now the ONLY consumer of the reader — no concurrent reads.
   const source = new ReadableStream<Uint8Array>({
     async pull(controller) {
-      // First, drain buffered chunks that were accumulated after settle
+      // First, drain buffered chunks that were accumulated during buffering phase
       while (bufferedChunks.length > 0) {
         controller.enqueue(bufferedChunks.shift()!);
         // Yield to prevent overwhelming the client
@@ -238,10 +228,11 @@ export async function bufferUpstreamStream(
         return;
       }
 
-      // Continue reading from upstream
+      // Continue reading from upstream — we are now the sole reader
       try {
         const { done, value } = await reader.read();
         if (done) {
+          upstreamDone = true;
           controller.close();
           return;
         }
@@ -258,8 +249,8 @@ export async function bufferUpstreamStream(
 
   return {
     stream: source,
-    bufferedChunks: [...bufferedChunks],
-    fullText: bufferedText,
+    bufferedChunks: snapshotChunks,
+    fullText: snapshotText,
   };
 }
 
