@@ -119,7 +119,6 @@ model Provider {
   code            String              @unique
   protocolType    String
   apiBaseUrl      String
-  pathPrefix      String?
   apiKeyEncrypted String
   status          String              @default("active")
   totalRpmLimit   Int?
