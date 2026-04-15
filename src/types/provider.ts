@@ -6,6 +6,7 @@ export interface Provider {
   code: string;
   protocolType: ProtocolType;
   apiBaseUrl: string;
+  pathPrefix?: string;
   apiKeyEncrypted: string;
   status: 'active' | 'disabled';
   totalRpmLimit?: number;
@@ -55,6 +56,7 @@ export interface CreateProviderInput {
   code: string;
   protocolType: ProtocolType;
   apiBaseUrl: string;
+  pathPrefix?: string;
   apiKey: string;
   totalRpmLimit?: number;
   totalTpmLimit?: number;
@@ -65,6 +67,7 @@ export interface UpdateProviderInput {
   name?: string;
   status?: 'active' | 'disabled';
   apiBaseUrl?: string;
+  pathPrefix?: string;
   apiKey?: string;
   totalRpmLimit?: number;
   totalTpmLimit?: number;

@@ -4,7 +4,7 @@ interface AntiFlapState {
 }
 
 const FLAP_STATES = new Map<string, AntiFlapState>();
-const OBSERVE_WINDOW_MS = 5 * 60 * 1000;
+const OBSERVE_WINDOW_MS = 20 * 60 * 1000;
 
 export function isInObservation(providerId: string): boolean {
   const state = FLAP_STATES.get(providerId);

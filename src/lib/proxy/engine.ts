@@ -6,6 +6,7 @@ import { DashScopeAdapter } from '@/lib/proxy/adapter/dashscope';
 import { CustomAdapter } from '@/lib/proxy/adapter/custom';
 import { ProviderConfig, ProxyRequest, ProxyResponse } from '@/lib/proxy/adapter/base';
 import { circuitBreaker } from '@/lib/failover/circuit-breaker';
+import { restoreState } from '@/lib/failover/circuit-breaker';
 import { rateLimiter } from '@/lib/rate-limit';
 import { quotaEngine } from '@/lib/quota/engine';
 
@@ -107,6 +108,31 @@ export class ProxyEngine {
       throw new Error('No active providers configured for this token');
     }
 
+    // Single provider: no failover needed, use longer timeout (2 min)
+    if (providers.length === 1) {
+      const provider = providers[0];
+      await this.setupProviderConfig(provider.id);
+      const providerConfig = await this.getProviderWithConfig(provider.id);
+
+      // Skip circuit breaker check for single provider — no backup to switch to
+      // but still record success/failure for observability
+      try {
+        const response = await this.forwardToProvider(provider, path, method, headers, body, 120000);
+        if (response.status >= 200 && response.status < 300) {
+          circuitBreaker.recordSuccess(provider.id, provider.name);
+          if (providerConfig?.totalRpmLimit) {
+            rateLimiter.record('provider', provider.id, 'rpm');
+          }
+          return { response, providerId: provider.id, failover: false, streamed: false };
+        }
+        circuitBreaker.recordFailure(provider.id, provider.name);
+        throw new Error(`Provider ${provider.name} returned ${response.status}`);
+      } catch (error) {
+        circuitBreaker.recordFailure(provider.id, provider.name);
+        throw error instanceof Error ? error : new Error(`Provider ${provider.name} request failed`);
+      }
+    }
+
     let lastError: Error | null = null;
     let failover = false;
     let streamed = false;
@@ -154,7 +180,9 @@ export class ProxyEngine {
       try {
         const response = await this.forwardToProvider(provider, path, method, headers, body);
 
-        if (response.status < 500) {
+        // Whitelist: only 2xx is considered success.
+        // Anything else (3xx, 4xx, 5xx) triggers failover.
+        if (response.status >= 200 && response.status < 300) {
           circuitBreaker.recordSuccess(provider.id, provider.name);
           if (providerConfig?.totalRpmLimit) {
             rateLimiter.record('provider', provider.id, 'rpm');
@@ -180,7 +208,8 @@ export class ProxyEngine {
     path: string,
     method: string,
     headers: Record<string, string>,
-    body?: any
+    body?: any,
+    timeoutMs?: number
   ): Promise<ProxyResponse> {
     const AdapterClass = this.adapterMap.get(provider.protocolType) || OpenAIAdapter;
     const adapter = new AdapterClass(provider as ProviderConfig);
@@ -192,7 +221,8 @@ export class ProxyEngine {
       path,
       method,
       headers,
-      body: redirectedBody
+      body: redirectedBody,
+      timeoutMs
     };
 
     return adapter.forward(request);
@@ -216,6 +246,15 @@ export async function setupProviderConfigs() {
         cooldownSeconds: provider.failoverConfig.cooldownSeconds,
         recoveryObserveSeconds: provider.failoverConfig.recoveryObserveSeconds
       });
+
+      // 恢复持久化的熔断器状态
+      const savedState = provider.failoverConfig.circuitState as 'closed' | 'open' | 'half_open';
+      if (savedState && savedState !== 'closed') {
+        const since = provider.failoverConfig.circuitStateSince
+          ? new Date(provider.failoverConfig.circuitStateSince).getTime()
+          : Date.now();
+        restoreState(provider.id, savedState, since);
+      }
     }
   }
 }

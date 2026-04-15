@@ -14,6 +14,7 @@ export interface ProxyRequest {
   method: string;
   headers: Record<string, string>;
   body?: any;
+  timeoutMs?: number;
 }
 
 export interface ProxyResponse {
@@ -93,11 +94,23 @@ export abstract class BaseAdapter {
       'Content-Type': 'application/json'
     };
 
-    const response = await fetch(url, {
-      method: request.method,
-      headers,
-      body: request.body ? JSON.stringify(request.body) : undefined
-    });
+    const timeoutMs = request.timeoutMs || parseInt(process.env.PROXY_UPSTREAM_TIMEOUT || '20000', 10);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: request.method,
+        headers,
+        body: request.body ? JSON.stringify(request.body) : undefined,
+        signal: controller.signal
+      });
+    } catch (err: any) {
+      throw new Error(`Upstream request failed: ${err.name === 'AbortError' ? 'timeout' : err.message}`);
+    }
+    // 收到响应头就取消超时，让后续 body 读取不受超时限制
+    clearTimeout(timer);
 
     const headersObj: Record<string, string> = {};
     response.headers.forEach((value, key) => {

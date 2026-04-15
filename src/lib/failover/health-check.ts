@@ -88,15 +88,14 @@ export const healthChecker = {
           await prisma.provider.update({
             where: { id: provider.id },
             data: {
-              healthStatus: result.healthy ? 'healthy' : 'down',
               lastHealthCheck: new Date()
             }
           });
 
           if (result.healthy) {
-            circuitBreaker.recordSuccess(provider.id, provider.name);
+            circuitBreaker.recordHealthSuccess(provider.id, provider.name);
           } else {
-            circuitBreaker.recordFailure(provider.id, provider.name);
+            circuitBreaker.recordHealthFailure(provider.id, provider.name);
           }
         }
       } catch (error) {

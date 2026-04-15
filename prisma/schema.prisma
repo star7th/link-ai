@@ -119,6 +119,7 @@ model Provider {
   code            String              @unique
   protocolType    String
   apiBaseUrl      String
+  pathPrefix      String?
   apiKeyEncrypted String
   status          String              @default("active")
   totalRpmLimit   Int?
@@ -266,6 +267,8 @@ model FailoverConfig {
   healthCheckEnabled     Boolean   @default(true)
   healthCheckInterval    Int       @default(60)
   healthCheckTimeout     Int       @default(10)
+  circuitState           String    @default("closed")
+  circuitStateSince      DateTime?
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma, proxyEngine, hashToken, rateLimiter, quotaEngine, auditLogger, circuitBreaker, alertEngine } from '@/lib/engines';
 import { applyModelRedirect } from '@/lib/proxy/engine';
 import { desensitizeEngine } from '@/lib/desensitize/engine';
-import { createStreamProxy, extractStreamUsage, extractReadableText } from '@/lib/proxy/stream';
+import { createStreamProxy, extractStreamUsage, extractReadableText, bufferUpstreamStream } from '@/lib/proxy/stream';
 import { setupProviderConfigs } from '@/lib/proxy/engine';
 import { resolveProxyUrl } from '@/lib/proxy/adapter/base';
 import { decrypt } from '@/lib/crypto';
@@ -455,6 +455,137 @@ async function handleRequest(
 
       const failedProviderIds: string[] = [];
 
+      // Single provider: no failover, use 2-minute timeout
+      if (providerList.length === 1) {
+        const tp = providerList[0];
+        const providerConfig = await prisma.provider.findUnique({ where: { id: tp.provider.id } });
+        const apiKey = decrypt(tp.provider.apiKeyEncrypted);
+        const url = resolveProxyUrl(tp.provider.apiBaseUrl, path);
+        const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
+
+        const headers: Record<string, string> = {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'User-Agent': userAgent,
+          'Accept': request.headers.get('accept') || 'application/json',
+        };
+
+        try {
+          const timeoutMs = 120000;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+          let upstream: Response;
+          try {
+            upstream = await fetch(url, {
+              method: request.method,
+              headers,
+              body: JSON.stringify(redirectedBody),
+              signal: controller.signal
+            });
+          } catch (fetchErr: any) {
+            clearTimeout(timer);
+            throw new Error(`Upstream stream request failed: ${fetchErr.name === 'AbortError' ? 'timeout' : fetchErr.message}`);
+          }
+          clearTimeout(timer);
+
+          if (upstream.ok && upstream.body) {
+            const buffered = await bufferUpstreamStream(upstream);
+
+            if (!buffered) {
+              circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
+              throw new Error('Single provider stream buffering failed');
+            }
+
+            rateLimiter.record('token', token.id, 'rpm');
+            if (providerConfig?.totalRpmLimit) {
+              rateLimiter.record('provider', tp.provider.id, 'rpm');
+            }
+            circuitBreaker.recordSuccess(tp.provider.id, tp.provider.name);
+
+            const stream = createStreamProxy(
+              new Response(buffered.stream, {
+                status: upstream.status,
+                headers: { 'Content-Type': 'text/event-stream' },
+              }),
+              {
+                onDone(fullText) {
+                  const completeText = buffered.fullText + fullText;
+                  const usage = extractStreamUsage(completeText);
+
+                  if (usage.totalTokens > 0) {
+                    const period = quotaEngine.store.getCurrentPeriod(token.quotaPeriod);
+                    quotaEngine.recordUsage('token', token.id, usage.totalTokens, period);
+                  }
+
+                  isAuditLogFullBodyEnabled().then((logFullBody) => {
+                    const hasHits = desensitizeHitResults.length > 0;
+                    auditLogger.log({
+                      tokenId: token.id,
+                      userId: token.userId,
+                      providerId: tp.provider.id,
+                      logType: 'request',
+                      action: path,
+                      requestMethod: method,
+                      responseStatus: upstream.status,
+                      responseTime: Date.now() - startTime,
+                      promptTokens: usage.promptTokens,
+                      completionTokens: usage.completionTokens,
+                      totalTokens: usage.totalTokens,
+                      isStream: true,
+                      failover: false,
+                      ipAddress: clientIp,
+                      userAgent,
+                      requestBody: (logFullBody || hasHits) && body ? JSON.stringify(body).slice(0, 50000) : undefined,
+                      responseBody: logFullBody ? extractReadableText(completeText).slice(0, 50000) || completeText.slice(0, 50000) : undefined,
+                      desensitizeHits: hasHits ? JSON.stringify(desensitizeHitResults) : undefined,
+                    });
+                  });
+                },
+                onError(error) {
+                  circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
+                  auditLogger.log({
+                    tokenId: token.id,
+                    userId: token.userId,
+                    providerId: tp.provider.id,
+                    logType: 'request',
+                    action: path,
+                    requestMethod: method,
+                    responseStatus: 502,
+                    responseTime: Date.now() - startTime,
+                    isStream: true,
+                    ipAddress: clientIp,
+                    userAgent,
+                    detail: JSON.stringify({ reason: 'Stream interrupted', error: error instanceof Error ? error.message : String(error) })
+                  });
+                }
+              }
+            );
+
+            return stream;
+          }
+
+          circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
+          throw new Error(`Single provider returned ${upstream.status}`);
+        } catch (error) {
+          circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
+          auditLogger.log({
+            tokenId: token.id,
+            userId: token.userId,
+            logType: 'request',
+            action: path,
+            requestMethod: method,
+            ipAddress: clientIp,
+            userAgent,
+            responseStatus: 502,
+            responseTime: Date.now() - startTime,
+            isStream: true,
+            detail: JSON.stringify({ reason: 'Single provider failed', error: error instanceof Error ? error.message : String(error) })
+          });
+          return NextResponse.json({ error: 'Single provider failed' }, { status: 502 });
+        }
+      }
+
       for (const tp of providerList) {
         if (!circuitBreaker.isAvailable(tp.provider.id)) {
           failedProviderIds.push(tp.provider.id);
@@ -501,30 +632,84 @@ async function handleRequest(
         };
 
         try {
-          const upstream = await fetch(url, {
-            method: request.method,
-            headers,
-            body: JSON.stringify(redirectedBody)
-          });
+          const timeoutMs = parseInt(process.env.PROXY_STREAM_UPSTREAM_TIMEOUT || '10000', 10);
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+          let upstream: Response;
+          try {
+            upstream = await fetch(url, {
+              method: request.method,
+              headers,
+              body: JSON.stringify(redirectedBody),
+              signal: controller.signal
+            });
+          } catch (fetchErr: any) {
+            clearTimeout(timer);
+            throw new Error(`Upstream stream request failed: ${fetchErr.name === 'AbortError' ? 'timeout' : fetchErr.message}`);
+          }
+          clearTimeout(timer);
 
           if (upstream.ok && upstream.body) {
+            // Buffer initial stream data to detect early failures
+            const buffered = await bufferUpstreamStream(upstream);
+
+            if (!buffered) {
+              // Upstream errored during buffering window → failover
+              failedProviderIds.push(tp.provider.id);
+              circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
+              continue;
+            }
+
             rateLimiter.record('token', token.id, 'rpm');
             if (providerConfig?.totalRpmLimit) {
               rateLimiter.record('provider', tp.provider.id, 'rpm');
             }
             circuitBreaker.recordSuccess(tp.provider.id, tp.provider.name);
 
-            const stream = createStreamProxy(upstream, {
-              onDone(fullText) {
-                const usage = extractStreamUsage(fullText);
+            // Wrap the buffered stream with the original proxy logic for onDone/onError
+            const stream = createStreamProxy(
+              new Response(buffered.stream, {
+                status: upstream.status,
+                headers: { 'Content-Type': 'text/event-stream' },
+              }),
+              {
+                onDone(fullText) {
+                  // Prepend any text already accumulated during buffering
+                  const completeText = buffered.fullText + fullText;
+                  const usage = extractStreamUsage(completeText);
 
-                if (usage.totalTokens > 0) {
-                  const period = quotaEngine.store.getCurrentPeriod(token.quotaPeriod);
-                  quotaEngine.recordUsage('token', token.id, usage.totalTokens, period);
-                }
+                  if (usage.totalTokens > 0) {
+                    const period = quotaEngine.store.getCurrentPeriod(token.quotaPeriod);
+                    quotaEngine.recordUsage('token', token.id, usage.totalTokens, period);
+                  }
 
-                isAuditLogFullBodyEnabled().then((logFullBody) => {
-                  const hasHits = desensitizeHitResults.length > 0;
+                  isAuditLogFullBodyEnabled().then((logFullBody) => {
+                    const hasHits = desensitizeHitResults.length > 0;
+                    auditLogger.log({
+                      tokenId: token.id,
+                      userId: token.userId,
+                      providerId: tp.provider.id,
+                      logType: 'request',
+                      action: path,
+                      requestMethod: method,
+                      responseStatus: upstream.status,
+                      responseTime: Date.now() - startTime,
+                      promptTokens: usage.promptTokens,
+                      completionTokens: usage.completionTokens,
+                      totalTokens: usage.totalTokens,
+                      isStream: true,
+                      failover: failedProviderIds.length > 0,
+                      ipAddress: clientIp,
+                      userAgent,
+                      requestBody: (logFullBody || hasHits) && body ? JSON.stringify(body).slice(0, 50000) : undefined,
+                      responseBody: logFullBody ? extractReadableText(completeText).slice(0, 50000) || completeText.slice(0, 50000) : undefined,
+                      desensitizeHits: hasHits ? JSON.stringify(desensitizeHitResults) : undefined,
+                    });
+                  });
+                },
+                onError(error) {
+                  circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
                   auditLogger.log({
                     tokenId: token.id,
                     userId: token.userId,
@@ -532,39 +717,16 @@ async function handleRequest(
                     logType: 'request',
                     action: path,
                     requestMethod: method,
-                    responseStatus: upstream.status,
+                    responseStatus: 502,
                     responseTime: Date.now() - startTime,
-                    promptTokens: usage.promptTokens,
-                    completionTokens: usage.completionTokens,
-                    totalTokens: usage.totalTokens,
                     isStream: true,
-                    failover: failedProviderIds.length > 0,
                     ipAddress: clientIp,
                     userAgent,
-                    requestBody: (logFullBody || hasHits) && body ? JSON.stringify(body).slice(0, 50000) : undefined,
-                    responseBody: logFullBody ? extractReadableText(fullText).slice(0, 50000) || fullText.slice(0, 50000) : undefined,
-                    desensitizeHits: hasHits ? JSON.stringify(desensitizeHitResults) : undefined,
+                    detail: JSON.stringify({ reason: 'Stream interrupted', error: error instanceof Error ? error.message : String(error) })
                   });
-                });
-              },
-              onError(error) {
-                circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
-                auditLogger.log({
-                  tokenId: token.id,
-                  userId: token.userId,
-                  providerId: tp.provider.id,
-                  logType: 'request',
-                  action: path,
-                  requestMethod: method,
-                  responseStatus: 502,
-                  responseTime: Date.now() - startTime,
-                  isStream: true,
-                  ipAddress: clientIp,
-                  userAgent,
-                  detail: JSON.stringify({ reason: 'Stream interrupted', error: error instanceof Error ? error.message : String(error) })
-                });
+                }
               }
-            });
+            );
 
             return stream;
           }
