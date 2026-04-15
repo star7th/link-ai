@@ -43,29 +43,24 @@ export function normalizeSSEStream(): TransformStream<Uint8Array, Uint8Array> {
   function flush(controller: TransformStreamDefaultController<Uint8Array>, isFinal: boolean) {
     if (buf.length === 0) return;
 
-    const positions = findDataPositions(buf);
+    // buf may contain already-normalized text from previous rounds plus new raw text.
+    // insertMissingSeparators is idempotent on already-normalized text, so always safe.
+    const normalized = insertMissingSeparators(buf);
+    buf = normalized; // Store normalized text back for next round
 
-    if (positions.length === 0) {
-      if (isFinal) {
-        controller.enqueue(encoder.encode(buf));
-        buf = '';
-      }
-      return;
+    if (!isFinal) {
+      // Find last complete SSE event boundary (\n\n)
+      const lastBoundary = normalized.lastIndexOf('\n\n');
+      if (lastBoundary === -1) return; // No complete event yet, keep buffering
+
+      const toEmit = normalized.substring(0, lastBoundary + 2);
+      buf = normalized.substring(lastBoundary + 2);
+      controller.enqueue(encoder.encode(toEmit));
+    } else {
+      // Final flush: emit everything remaining
+      controller.enqueue(encoder.encode(normalized));
+      buf = '';
     }
-
-    // Cut point: emit everything before the last `data:` (it may be incomplete).
-    // On final flush, emit the entire buffer.
-    const cutPos = isFinal ? buf.length : positions[positions.length - 1];
-
-    if (cutPos === 0 && !isFinal) {
-      // Only one incomplete data: event — wait for more data
-      return;
-    }
-
-    const toEmit = buf.substring(0, cutPos);
-    buf = buf.substring(cutPos);
-
-    controller.enqueue(encoder.encode(insertMissingSeparators(toEmit)));
   }
 
   /**
@@ -262,7 +257,7 @@ export async function bufferUpstreamStream(
   });
 
   return {
-    stream: source.pipeThrough(normalizeSSEStream()),
+    stream: source,
     bufferedChunks: [...bufferedChunks],
     fullText: bufferedText,
   };
@@ -283,27 +278,40 @@ export function createStreamProxy(upstreamResponse: Response, options?: StreamPr
   const reader = body.getReader();
 
   // Wrap the upstream body to intercept errors and convert to SSE error event
+  let streamCancelled = false;
   const errorHandled = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) {
-            controller.close();
+            try { controller.close(); } catch {}
             return;
           }
-          controller.enqueue(value);
+          try {
+            controller.enqueue(value);
+          } catch {
+            // Controller closed (cancelled), stop reading
+            return;
+          }
         }
       } catch (error) {
+        if (streamCancelled) return;
         options?.onError?.(error);
+        if (streamCancelled) return;
         const errorMsg = JSON.stringify({
           error: { type: 'stream_interrupted', message: '上游连接中断，请重试' },
         });
-        controller.enqueue(new TextEncoder().encode(`data: ${errorMsg}\n\n`));
-        controller.close();
+        try {
+          controller.enqueue(new TextEncoder().encode(`data: ${errorMsg}\n\n`));
+          controller.close();
+        } catch {
+          // Controller already closed, ignore
+        }
       }
     },
     cancel() {
+      streamCancelled = true;
       reader.cancel();
     },
   });
