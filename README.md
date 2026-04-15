@@ -161,3 +161,6 @@ src/
 ## 🔗 链接
 
 * GitHub 仓库: https://github.com/star7th/link-ai
+
+## Contributing
+Contributions are welcome.
