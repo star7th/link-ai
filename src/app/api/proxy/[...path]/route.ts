@@ -439,7 +439,8 @@ async function handleRequest(
           userAgent,
           responseStatus: 404,
           responseTime: Date.now() - startTime,
-          detail: JSON.stringify({ reason: 'Token not found when loading providers' })
+          detail: JSON.stringify({ reason: 'Token not found when loading providers' }),
+          requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
         });
         return NextResponse.json({ error: 'Token not found' }, { status: 404 });
       }
@@ -556,7 +557,9 @@ async function handleRequest(
                     isStream: true,
                     ipAddress: clientIp,
                     userAgent,
-                    detail: JSON.stringify({ reason: 'Stream interrupted', error: error instanceof Error ? error.message : String(error) })
+                    detail: JSON.stringify({ reason: 'Stream interrupted', error: error instanceof Error ? error.message : String(error) }),
+                    requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+                    responseBody: error instanceof Error ? error.message : String(error),
                   });
                 }
               }
@@ -569,6 +572,7 @@ async function handleRequest(
           throw new Error(`Single provider returned ${upstream.status}`);
         } catch (error) {
           circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
+          const errMsg = error instanceof Error ? error.message : String(error);
           auditLogger.log({
             tokenId: token.id,
             userId: token.userId,
@@ -580,7 +584,9 @@ async function handleRequest(
             responseStatus: 502,
             responseTime: Date.now() - startTime,
             isStream: true,
-            detail: JSON.stringify({ reason: 'Single provider failed', error: error instanceof Error ? error.message : String(error) })
+            detail: JSON.stringify({ reason: 'Single provider failed', error: errMsg }),
+            requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+            responseBody: errMsg,
           });
           return NextResponse.json({ error: 'Single provider failed' }, { status: 502 });
         }
@@ -722,7 +728,9 @@ async function handleRequest(
                     isStream: true,
                     ipAddress: clientIp,
                     userAgent,
-                    detail: JSON.stringify({ reason: 'Stream interrupted', error: error instanceof Error ? error.message : String(error) })
+                    detail: JSON.stringify({ reason: 'Stream interrupted', error: error instanceof Error ? error.message : String(error) }),
+                    requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+                    responseBody: error instanceof Error ? error.message : String(error),
                   });
                 }
               }
@@ -755,7 +763,8 @@ async function handleRequest(
           providerCount: providerList.length,
           failedProviderIds,
           noProviderBound: providerList.length === 0
-        })
+        }),
+        requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
       });
       return NextResponse.json({ error: 'All providers failed' }, { status: 502 });
     }
@@ -810,7 +819,9 @@ async function handleRequest(
           ipAddress: clientIp,
           userAgent,
           responseStatus: 429,
-          detail: JSON.stringify({ reason: 'TPM limit exceeded' })
+          detail: JSON.stringify({ reason: 'TPM limit exceeded' }),
+          requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+          responseBody: result.response.body ? JSON.stringify(result.response.body).slice(0, 50000) : undefined,
         });
       }
     }
@@ -832,8 +843,8 @@ async function handleRequest(
       failover: result.failover,
       ipAddress: clientIp,
       userAgent,
-      requestBody: (logFullBody || hasDesensitizeHits) && body ? JSON.stringify(body).slice(0, 50000) : undefined,
-      responseBody: logFullBody && result.response.body ? JSON.stringify(result.response.body).slice(0, 50000) : undefined,
+      requestBody: (logFullBody || hasDesensitizeHits || result.response.status !== 200) && body ? JSON.stringify(body).slice(0, 50000) : undefined,
+      responseBody: (logFullBody || result.response.status !== 200) && result.response.body ? JSON.stringify(result.response.body).slice(0, 50000) : undefined,
       desensitizeHits: hasDesensitizeHits ? JSON.stringify(desensitizeHitResults) : undefined,
     });
 
@@ -856,7 +867,9 @@ async function handleRequest(
       responseTime,
       ipAddress: clientIp,
       userAgent,
-      detail: JSON.stringify({ error: errorMsg })
+      detail: JSON.stringify({ error: errorMsg }),
+      requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+      responseBody: errorMsg,
     });
 
     return NextResponse.json({ error: 'Proxy request failed' }, { status: 502 });
