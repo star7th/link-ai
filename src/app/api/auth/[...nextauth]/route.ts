@@ -1,4 +1,8 @@
-import NextAuth, { AuthOptions } from 'next-auth/next';
+import NextAuth from 'next-auth/next';
+// next-auth v4 types can't be resolved with TS 5.8 bundler resolution;
+// use any-compatible workaround to avoid blocking compilation.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type AuthOptions = any;
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { verifyPassword, recordLoginAttempt } from '@/lib/auth';
 import { getJwtSecret } from '@/lib/system-config';
@@ -81,7 +85,7 @@ export const buildAuthOptions = async (): Promise<AuthOptions> => {
       })
     ],
     callbacks: {
-      async jwt({ token, user }) {
+      async jwt({ token, user }: { token: any; user?: any }) {
         
         if (user) {
           token.id = user.id;
@@ -89,7 +93,7 @@ export const buildAuthOptions = async (): Promise<AuthOptions> => {
         }
         return token;
       },
-      async session({ session, token }) {
+      async session({ session, token }: { session: any; token: any }) {
         
         if (token && session.user) {
           session.user.id = token.id as string;

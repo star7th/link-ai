@@ -19,6 +19,8 @@ interface Provider {
   totalRpmLimit: number | null;
   totalTpmLimit: number | null;
   modelRedirect: string | null;
+  timeoutMs: number | null;
+  streamTimeoutMs: number | null;
   createdAt: string;
 }
 
@@ -43,6 +45,8 @@ interface CreateProviderForm {
   totalRpmLimit: string;
   totalTpmLimit: string;
   modelRedirectRules: ModelRedirectRule[];
+  timeoutMs: string;
+  streamTimeoutMs: string;
 }
 
 interface EditProviderForm {
@@ -53,6 +57,8 @@ interface EditProviderForm {
   totalRpmLimit: string;
   totalTpmLimit: string;
   modelRedirectRules: ModelRedirectRule[];
+  timeoutMs: string;
+  streamTimeoutMs: string;
 }
 
 interface TestResult {
@@ -277,6 +283,8 @@ function CreateProviderModal({
     totalRpmLimit: "",
     totalTpmLimit: "",
     modelRedirectRules: [],
+    timeoutMs: "",
+    streamTimeoutMs: "",
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -316,6 +324,8 @@ function CreateProviderModal({
       if (form.totalTpmLimit) body.totalTpmLimit = Number(form.totalTpmLimit);
       const modelRedirect = serializeModelRedirect(form.modelRedirectRules);
       if (modelRedirect) body.modelRedirect = modelRedirect;
+      if (form.timeoutMs) body.timeoutMs = Number(form.timeoutMs);
+      if (form.streamTimeoutMs) body.streamTimeoutMs = Number(form.streamTimeoutMs);
       const res = await fetch("/api/admin/providers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -334,6 +344,8 @@ function CreateProviderModal({
         totalRpmLimit: "",
         totalTpmLimit: "",
         modelRedirectRules: [],
+        timeoutMs: "",
+        streamTimeoutMs: "",
       });
       onSuccess();
       onClose();
@@ -455,6 +467,32 @@ function CreateProviderModal({
                       onChange={(rules) => setForm({ ...form, modelRedirectRules: rules })}
                     />
                   </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">超时设置</label>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs text-muted-foreground mb-1">非流式超时（毫秒）</label>
+                        <Input
+                          type="number"
+                          value={form.timeoutMs}
+                          onChange={(e) => setForm({ ...form, timeoutMs: e.target.value })}
+                          placeholder="自动"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-muted-foreground mb-1">流式超时（毫秒）</label>
+                        <Input
+                          type="number"
+                          value={form.streamTimeoutMs}
+                          onChange={(e) => setForm({ ...form, streamTimeoutMs: e.target.value })}
+                          placeholder="自动"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      留空则根据请求体大小自动计算超时时间
+                    </p>
+                  </div>
                 </div>
               )}
             </div>
@@ -495,6 +533,8 @@ function EditProviderModal({
     totalRpmLimit: "",
     totalTpmLimit: "",
     modelRedirectRules: [],
+    timeoutMs: "",
+    streamTimeoutMs: "",
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -515,9 +555,11 @@ function EditProviderModal({
         totalRpmLimit: provider.totalRpmLimit?.toString() ?? "",
         totalTpmLimit: provider.totalTpmLimit?.toString() ?? "",
         modelRedirectRules: parseModelRedirect(provider.modelRedirect),
+        timeoutMs: provider.timeoutMs?.toString() ?? "",
+        streamTimeoutMs: provider.streamTimeoutMs?.toString() ?? "",
       });
       setError("");
-      setShowAdvanced(!!provider.modelRedirect);
+      setShowAdvanced(!!provider.modelRedirect || !!provider.timeoutMs || !!provider.streamTimeoutMs);
     }
   }, [isOpen, provider]);
 
@@ -545,6 +587,8 @@ function EditProviderModal({
       if (form.totalRpmLimit) body.totalRpmLimit = Number(form.totalRpmLimit);
       if (form.totalTpmLimit) body.totalTpmLimit = Number(form.totalTpmLimit);
       body.modelRedirect = serializeModelRedirect(form.modelRedirectRules);
+      if (form.timeoutMs) body.timeoutMs = Number(form.timeoutMs);
+      if (form.streamTimeoutMs) body.streamTimeoutMs = Number(form.streamTimeoutMs);
       const res = await fetch(`/api/admin/providers/${provider.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -653,6 +697,32 @@ function EditProviderModal({
                       rules={form.modelRedirectRules}
                       onChange={(rules) => setForm({ ...form, modelRedirectRules: rules })}
                     />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">超时设置</label>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs text-muted-foreground mb-1">非流式超时（毫秒）</label>
+                        <Input
+                          type="number"
+                          value={form.timeoutMs}
+                          onChange={(e) => setForm({ ...form, timeoutMs: e.target.value })}
+                          placeholder="自动"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-muted-foreground mb-1">流式超时（毫秒）</label>
+                        <Input
+                          type="number"
+                          value={form.streamTimeoutMs}
+                          onChange={(e) => setForm({ ...form, streamTimeoutMs: e.target.value })}
+                          placeholder="自动"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      留空则根据请求体大小自动计算超时时间
+                    </p>
                   </div>
                 </div>
               )}

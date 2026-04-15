@@ -68,14 +68,20 @@ class AuditLogger {
         target.requestBody = requestBody.slice(0, 50000);
       }
     } else {
-      prisma.auditLog.updateMany({
+      // Find the most recent matching log, then update it
+      prisma.auditLog.findFirst({
         where: { tokenId, logType: 'request' },
-        data: {
-          desensitizeHits: JSON.stringify(hits),
-          requestBody: requestBody.slice(0, 50000),
-        },
         orderBy: { createdAt: 'desc' },
-        take: 1,
+      }).then((log) => {
+        if (log) {
+          return prisma.auditLog.update({
+            where: { id: log.id },
+            data: {
+              desensitizeHits: JSON.stringify(hits),
+              requestBody: requestBody.slice(0, 50000),
+            },
+          });
+        }
       }).catch((err: unknown) => {
         console.error('Failed to mark desensitize hits on existing audit log:', err);
       });

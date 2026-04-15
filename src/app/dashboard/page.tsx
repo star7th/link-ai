@@ -6,11 +6,11 @@ export default async function DashboardPage() {
   const authOptions = await buildAuthOptions();
   const session = await getServerSession(authOptions);
 
-  if (!session?.user) {
+  if (!(session as any)?.user) {
     redirect('/auth/login');
   }
 
-  if (((session as any).user).isAdmin) {
+  if ((session as any).user.isAdmin) {
     redirect('/admin/overview');
   } else {
     redirect('/dashboard/overview');

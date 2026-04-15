@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { getToken } from 'next-auth/jwt';
+// next-auth/jwt exports getToken at runtime but TS 5.8 bundler resolution
+// fails to resolve the type. Suppress to unblock compilation.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { getToken }: { getToken: (params: { req: any; secret?: string }) => Promise<any> } = require('next-auth/jwt');
 
 const publicPaths = ['/', '/auth/login', '/auth/register', '/api/auth', '/setup', '/api/proxy', '/v1'];
 const publicApiPaths = ['/chat/', '/completions', '/models', '/embeddings', '/images/', '/audio/', '/files', '/moderations'];

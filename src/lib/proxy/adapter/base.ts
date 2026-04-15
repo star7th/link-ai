@@ -1,4 +1,5 @@
 import { decrypt } from '../../crypto';
+import { calculateDynamicTimeout } from '../timeout';
 
 export interface ProviderConfig {
   id: string;
@@ -94,7 +95,8 @@ export abstract class BaseAdapter {
       'Content-Type': 'application/json'
     };
 
-    const timeoutMs = request.timeoutMs || parseInt(process.env.PROXY_UPSTREAM_TIMEOUT || '20000', 10);
+    const bodySize = request.body ? new Blob([JSON.stringify(request.body)]).size : 0;
+    const timeoutMs = request.timeoutMs ?? calculateDynamicTimeout(bodySize, false);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 

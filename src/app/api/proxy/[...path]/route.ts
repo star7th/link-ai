@@ -7,6 +7,7 @@ import { setupProviderConfigs } from '@/lib/proxy/engine';
 import { resolveProxyUrl } from '@/lib/proxy/adapter/base';
 import { decrypt } from '@/lib/crypto';
 import { isAuditLogFullBodyEnabled } from '@/lib/system-config';
+import { resolveTimeout } from '@/lib/proxy/timeout';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -472,7 +473,8 @@ async function handleRequest(
         };
 
         try {
-          const timeoutMs = 120000;
+          const bodySize = new Blob([JSON.stringify(redirectedBody)]).size;
+          const timeoutMs = resolveTimeout(tp.provider.timeoutMs, tp.provider.streamTimeoutMs, bodySize, true);
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -617,7 +619,7 @@ async function handleRequest(
 
         // 提供商级配额校验
         const providerQuotaCheck = await quotaEngine.checkQuota('provider', tp.provider.id, {
-          tokenLimit: providerConfig?.totalTpmLimit,
+          tokenLimit: providerConfig?.totalTpmLimit ?? undefined,
           period: 'monthly'
         });
         if (!providerQuotaCheck.allowed) {
@@ -638,7 +640,8 @@ async function handleRequest(
         };
 
         try {
-          const timeoutMs = parseInt(process.env.PROXY_STREAM_UPSTREAM_TIMEOUT || '10000', 10);
+          const bodySize = new Blob([JSON.stringify(redirectedBody)]).size;
+          const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, bodySize, true);
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), timeoutMs);
 

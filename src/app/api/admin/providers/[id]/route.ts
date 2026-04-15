@@ -44,7 +44,7 @@ export async function PATCH(
   if (authError) return authError;
 
   const body = await request.json();
-  const { name, status, totalRpmLimit, totalTpmLimit, apiBaseUrl, apiKey, modelRedirect } = body;
+  const { name, status, totalRpmLimit, totalTpmLimit, apiBaseUrl, apiKey, modelRedirect, timeoutMs, streamTimeoutMs } = body;
 
   const updateData: any = {};
   if (name) updateData.name = name;
@@ -54,6 +54,8 @@ export async function PATCH(
   if (apiBaseUrl) updateData.apiBaseUrl = apiBaseUrl;
   if (apiKey) updateData.apiKeyEncrypted = encrypt(apiKey);
   if (modelRedirect !== undefined) updateData.modelRedirect = modelRedirect || null;
+  if (timeoutMs !== undefined) updateData.timeoutMs = timeoutMs ? Number(timeoutMs) : null;
+  if (streamTimeoutMs !== undefined) updateData.streamTimeoutMs = streamTimeoutMs ? Number(streamTimeoutMs) : null;
 
   const provider = await prisma.provider.update({
     where: { id },
