@@ -8,6 +8,10 @@ const nextConfig = {
   async rewrites() {
     return [
       {
+        source: '/v1/messages',
+        destination: '/api/anthropic/v1/messages',
+      },
+      {
         source: '/v1/:path*',
         destination: '/api/proxy/v1/:path*',
       },
