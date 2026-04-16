@@ -5,13 +5,14 @@ import type { NextRequest } from 'next/server';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { getToken }: { getToken: (params: { req: any; secret?: string }) => Promise<any> } = require('next-auth/jwt');
 
-const publicPaths = ['/', '/auth/login', '/auth/register', '/api/auth', '/setup', '/api/proxy', '/v1'];
+const publicPaths = ['/auth/login', '/auth/register', '/api/auth', '/setup', '/api/proxy', '/api/anthropic', '/v1'];
 const publicApiPaths = ['/chat/', '/completions', '/models', '/embeddings', '/images/', '/audio/', '/files', '/moderations'];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  const isPublicPath = publicPaths.some(path => pathname.startsWith(path))
+  const isPublicPath = pathname === '/'
+    || publicPaths.some(path => pathname.startsWith(path))
     || publicApiPaths.some(path => pathname.startsWith(path));
 
   if (isPublicPath) {
@@ -29,7 +30,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (pathname.startsWith('/admin') && !(token as any).isAdmin) {
+  if ((pathname.startsWith('/admin') || pathname.startsWith('/api/admin')) && !(token as any).isAdmin) {
     if (pathname.startsWith('/api/')) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
