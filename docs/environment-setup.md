@@ -40,6 +40,8 @@ npm run dev
 - 迁移：`npx prisma migrate dev`
 - 重置：`npx prisma migrate reset`
 
+> ⚠️ **新增字段必须走版本化升级脚本，禁止直接改数据库！** 详见 [`database-upgrade-safety.md`](./database-upgrade-safety.md)。
+
 ---
 
 ## 环境变量

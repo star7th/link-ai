@@ -596,6 +596,38 @@ const DB_VERSIONS = [
         await prisma.$executeRawUnsafe(`ALTER TABLE "Provider" ADD COLUMN "modelRedirect" TEXT;`);
       }
     }
+  },
+  {
+    version: 16,
+    name: '提供商增加超时配置字段',
+    check: async () => {
+      return await hasColumn('Provider', 'timeoutMs') &&
+             await hasColumn('Provider', 'streamTimeoutMs');
+    },
+    upgrade: async () => {
+      if (!await hasColumn('Provider', 'timeoutMs')) {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "Provider" ADD COLUMN "timeoutMs" INTEGER;`);
+      }
+      if (!await hasColumn('Provider', 'streamTimeoutMs')) {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "Provider" ADD COLUMN "streamTimeoutMs" INTEGER;`);
+      }
+    }
+  },
+  {
+    version: 17,
+    name: '故障转移配置增加熔断状态字段',
+    check: async () => {
+      return await hasColumn('FailoverConfig', 'circuitState') &&
+             await hasColumn('FailoverConfig', 'circuitStateSince');
+    },
+    upgrade: async () => {
+      if (!await hasColumn('FailoverConfig', 'circuitState')) {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "FailoverConfig" ADD COLUMN "circuitState" TEXT NOT NULL DEFAULT 'closed';`);
+      }
+      if (!await hasColumn('FailoverConfig', 'circuitStateSince')) {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "FailoverConfig" ADD COLUMN "circuitStateSince" DATETIME;`);
+      }
+    }
   }
 ];
 
