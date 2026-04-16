@@ -95,8 +95,9 @@ export abstract class BaseAdapter {
       'Content-Type': 'application/json'
     };
 
-    const encodedBody = request.body ? new Blob([JSON.stringify(request.body)], { type: 'application/json' }) : null;
-    const timeoutMs = request.timeoutMs ?? calculateDynamicTimeout(encodedBody?.size ?? 0, false);
+    const bodyStr = request.body ? JSON.stringify(request.body) : null;
+    const bodySize = bodyStr ? new Blob([bodyStr]).size : 0;
+    const timeoutMs = request.timeoutMs ?? calculateDynamicTimeout(bodySize, false);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -105,7 +106,7 @@ export abstract class BaseAdapter {
       response = await fetch(url, {
         method: request.method,
         headers,
-        body: encodedBody,
+        body: bodyStr,
         signal: controller.signal
       });
     } catch (err: any) {

@@ -23,12 +23,12 @@ export class AzureAdapter extends BaseAdapter {
       'Content-Type': 'application/json'
     };
 
-    const encodedBody = request.body ? new Blob([JSON.stringify(request.body)], { type: 'application/json' }) : undefined;
+    const bodyStr = request.body ? JSON.stringify(request.body) : undefined;
 
     const response = await fetch(url, {
       method: request.method,
       headers,
-      body: encodedBody
+      body: bodyStr
     });
 
     const headersObj: Record<string, string> = {};

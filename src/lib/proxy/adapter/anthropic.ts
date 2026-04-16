@@ -71,12 +71,12 @@ export class AnthropicAdapter extends BaseAdapter {
       'Content-Type': 'application/json'
     };
 
-    const encodedBody = adaptedBody ? new Blob([JSON.stringify(adaptedBody)], { type: 'application/json' }) : undefined;
+    const bodyStr = adaptedBody ? JSON.stringify(adaptedBody) : undefined;
 
     const response = await fetch(url, {
       method: request.method,
       headers,
-      body: encodedBody
+      body: bodyStr
     });
 
     const headersObj: Record<string, string> = {};

@@ -399,13 +399,6 @@ async function handleRequest(
   const anthropicVersion = request.headers.get('anthropic-version') || '2023-06-01';
   const anthropicBeta = request.headers.get('anthropic-beta');
 
-  function encodeBody(obj: any): { body: Blob; size: number } | null {
-    if (obj == null) return null;
-    const str = JSON.stringify(obj);
-    const blob = new Blob([str], { type: 'application/json' });
-    return { body: blob, size: blob.size };
-  }
-
   function buildUpstreamHeaders(apiKey: string): Record<string, string> {
     const headers: Record<string, string> = {
       'x-api-key': apiKey,
@@ -460,10 +453,11 @@ async function handleRequest(
         const apiKey = decrypt(provider.apiKeyEncrypted);
         auditLogger.log({ logType: 'debug', action: 'anthropic_forward', detail: url, providerId: provider.id });
         const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
-        const encoded = encodeBody(redirectedBody);
         const headers = buildUpstreamHeaders(apiKey);
 
-        const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, encoded?.size ?? 0, true);
+        const bodyStr = JSON.stringify(redirectedBody);
+        const bodySize = new Blob([bodyStr]).size;
+        const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, bodySize, true);
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -472,7 +466,7 @@ async function handleRequest(
           upstream = await fetch(url, {
             method: request.method,
             headers,
-            body: encoded?.body,
+            body: bodyStr,
             signal: controller.signal
           });
         } catch (fetchErr: any) {
@@ -666,10 +660,11 @@ async function handleRequest(
       const apiKey = decrypt(provider.apiKeyEncrypted);
       auditLogger.log({ logType: 'debug', action: 'anthropic_forward', detail: url, providerId: provider.id });
       const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
-      const encoded = encodeBody(redirectedBody);
       const headers = buildUpstreamHeaders(apiKey);
 
-      const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, encoded?.size ?? 0, false);
+      const bodyStr = redirectedBody ? JSON.stringify(redirectedBody) : undefined;
+      const bodySize = bodyStr ? new Blob([bodyStr]).size : 0;
+      const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, bodySize, false);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -678,7 +673,7 @@ async function handleRequest(
         upstream = await fetch(url, {
           method: request.method,
           headers,
-          body: encoded?.body,
+          body: bodyStr,
           signal: controller.signal
         });
       } catch (fetchErr: any) {

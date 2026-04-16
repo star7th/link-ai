@@ -473,8 +473,9 @@ async function handleRequest(
         };
 
         try {
-          const encodedBody = redirectedBody ? new Blob([JSON.stringify(redirectedBody)], { type: 'application/json' }) : undefined;
-          const timeoutMs = resolveTimeout(tp.provider.timeoutMs, tp.provider.streamTimeoutMs, encodedBody?.size ?? 0, true);
+          const bodyStr = JSON.stringify(redirectedBody);
+          const bodySize = new Blob([bodyStr]).size;
+          const timeoutMs = resolveTimeout(tp.provider.timeoutMs, tp.provider.streamTimeoutMs, bodySize, true);
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -483,7 +484,7 @@ async function handleRequest(
             upstream = await fetch(url, {
               method: request.method,
               headers,
-              body: encodedBody,
+              body: bodyStr,
               signal: controller.signal
             });
           } catch (fetchErr: any) {
@@ -642,8 +643,9 @@ async function handleRequest(
         };
 
         try {
-          const encodedBody = redirectedBody ? new Blob([JSON.stringify(redirectedBody)], { type: 'application/json' }) : undefined;
-          const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, encodedBody?.size ?? 0, true);
+          const bodyStr = JSON.stringify(redirectedBody);
+          const bodySize = new Blob([bodyStr]).size;
+          const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, bodySize, true);
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -652,7 +654,7 @@ async function handleRequest(
             upstream = await fetch(url, {
               method: request.method,
               headers,
-              body: encodedBody,
+              body: bodyStr,
               signal: controller.signal
             });
           } catch (fetchErr: any) {
