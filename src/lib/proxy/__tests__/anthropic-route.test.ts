@@ -810,3 +810,137 @@ describe('Anthropic route: quota recording', () => {
     );
   });
 });
+
+describe('Anthropic route: Content-Length matches body after model redirect', () => {
+  it('sets Content-Length to match the redirected body (not the original)', async () => {
+    // Reset desensitize mock (previous tests may set blocked:true)
+    const { desensitizeEngine } = await import('@/lib/engines');
+    (desensitizeEngine.processRequest as any).mockResolvedValue({
+      blocked: false,
+      hits: [],
+      content: '',
+    });
+
+    // Simulate applyModelRedirect changing the model name to a longer one
+    const { applyModelRedirect } = await import('@/lib/proxy/engine');
+    (applyModelRedirect as any).mockImplementation((body: any, _redirect: any) => {
+      if (body?.model === 'claude-3') {
+        return { ...body, model: 'claude-3-opus-20240229' };
+      }
+      return body;
+    });
+
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 'msg_1', type: 'message', usage: {} }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    global.fetch = mockFetch;
+
+    const req = createMockRequest({
+      url: 'http://localhost/api/anthropic/v1/messages',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: { model: 'claude-3', stream: false, messages: [{ role: 'user', content: 'Hi' }] },
+    });
+    const params = Promise.resolve({ path: ['v1', 'messages'] });
+
+    const response = await POST(req, { params });
+    expect(response.status).toBe(200);
+
+    const fetchCall = mockFetch.mock.calls[0];
+    const fetchOptions = fetchCall[1];
+    const fetchHeaders = fetchOptions.headers;
+    const fetchBody: string = fetchOptions.body;
+
+    // Content-Length must equal the actual byte length of the body being sent
+    const expectedLength = Buffer.byteLength(fetchBody);
+    expect(fetchHeaders['Content-Length']).toBe(String(expectedLength));
+
+    // Verify the body contains the redirected model name
+    const parsedBody = JSON.parse(fetchBody);
+    expect(parsedBody.model).toBe('claude-3-opus-20240229');
+  });
+
+  it('sets Content-Length correctly for bodies with multi-byte characters', async () => {
+    // Reset desensitize mock
+    const { desensitizeEngine } = await import('@/lib/engines');
+    (desensitizeEngine.processRequest as any).mockResolvedValue({
+      blocked: false,
+      hits: [],
+      content: '',
+    });
+
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 'msg_1', type: 'message', usage: {} }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    global.fetch = mockFetch;
+
+    const req = createMockRequest({
+      url: 'http://localhost/api/anthropic/v1/messages',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: {
+        model: 'claude-3',
+        stream: false,
+        messages: [{ role: 'user', content: '你好世界 🌍' }],
+      },
+    });
+    const params = Promise.resolve({ path: ['v1', 'messages'] });
+
+    const response = await POST(req, { params });
+    expect(response.status).toBe(200);
+
+    const fetchCall = mockFetch.mock.calls[0];
+    const fetchOptions = fetchCall[1];
+    const fetchHeaders = fetchOptions.headers;
+    const fetchBody: string = fetchOptions.body;
+
+    // Content-Length must be the UTF-8 byte length, not the character count
+    const byteLength = Buffer.byteLength(fetchBody);
+    expect(fetchHeaders['Content-Length']).toBe(String(byteLength));
+    // Multi-byte content means byte length > character count
+    expect(byteLength).toBeGreaterThan(fetchBody.length);
+  });
+
+  it('does not set Content-Length when body is empty (GET-like)', async () => {
+    // No content-type → body stays null → redirectedBody is null → no body
+    const req = createMockRequest({
+      url: 'http://localhost/api/anthropic/v1/messages',
+      method: 'GET',
+      headers: {},
+    });
+    const params = Promise.resolve({ path: ['v1', 'messages'] });
+
+    const { applyModelRedirect } = await import('@/lib/proxy/engine');
+    (applyModelRedirect as any).mockImplementation((body: any) => body);
+
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    global.fetch = mockFetch;
+
+    await GET(req, { params });
+
+    if (mockFetch.mock.calls.length > 0) {
+      const fetchCall = mockFetch.mock.calls[0];
+      const fetchOptions = fetchCall[1];
+      const fetchHeaders = fetchOptions.headers;
+      const fetchBody = fetchOptions.body;
+
+      // No Content-Length should be set for null/undefined body
+      if (fetchBody == null) {
+        expect(fetchHeaders['Content-Length']).toBeUndefined();
+      }
+    }
+  });
+});

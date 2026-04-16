@@ -455,8 +455,11 @@ async function handleRequest(
         const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
         const headers = buildUpstreamHeaders(apiKey);
 
-        const bodyStr = JSON.stringify(redirectedBody);
-        const bodySize = new Blob([bodyStr]).size;
+        const bodyStr = redirectedBody != null ? JSON.stringify(redirectedBody) : undefined;
+        if (bodyStr) {
+          headers['Content-Length'] = String(Buffer.byteLength(bodyStr));
+        }
+        const bodySize = bodyStr ? new Blob([bodyStr]).size : 0;
         const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, bodySize, true);
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -662,7 +665,10 @@ async function handleRequest(
       const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
       const headers = buildUpstreamHeaders(apiKey);
 
-      const bodyStr = redirectedBody ? JSON.stringify(redirectedBody) : undefined;
+      const bodyStr = redirectedBody != null ? JSON.stringify(redirectedBody) : undefined;
+      if (bodyStr) {
+        headers['Content-Length'] = String(Buffer.byteLength(bodyStr));
+      }
       const bodySize = bodyStr ? new Blob([bodyStr]).size : 0;
       const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, bodySize, false);
       const controller = new AbortController();
