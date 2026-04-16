@@ -448,12 +448,13 @@ async function handleRequest(
         continue;
       }
 
-      const apiKey = decrypt(provider.apiKeyEncrypted);
-      const url = resolveProxyUrl(provider.apiBaseUrl, path);
-      const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
-      const headers = buildUpstreamHeaders(apiKey);
-
       try {
+        const apiKey = decrypt(provider.apiKeyEncrypted);
+        const url = resolveProxyUrl(provider.apiBaseUrl, path);
+        auditLogger.log({ logType: 'debug', action: 'anthropic_forward', detail: url, providerId: provider.id });
+        const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
+        const headers = buildUpstreamHeaders(apiKey);
+
         const bodySize = new Blob([JSON.stringify(redirectedBody)]).size;
         const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, bodySize, true);
         const controller = new AbortController();
@@ -469,7 +470,9 @@ async function handleRequest(
           });
         } catch (fetchErr: any) {
           clearTimeout(timer);
-          throw new Error(`Upstream stream request failed: ${fetchErr.name === 'AbortError' ? 'timeout' : fetchErr.message}`);
+          const errMsg = fetchErr.name === 'AbortError' ? 'timeout' : fetchErr.message;
+          const cause = fetchErr.cause?.message || '';
+          throw new Error(`Upstream stream request failed: ${errMsg}${cause ? ` (${cause})` : ''}`, { cause: fetchErr });
         }
         clearTimeout(timer);
 
@@ -554,13 +557,32 @@ async function handleRequest(
 
         failedProviderIds.push(provider.id);
         circuitBreaker.recordFailure(provider.id, provider.name);
-      } catch (error) {
+      } catch (error: any) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        const causeMsg = error?.cause?.message || '';
+        console.error(`[Anthropic stream] Provider ${provider.id} (${provider.name}) failed: ${errMsg}${causeMsg ? ` — cause: ${causeMsg}` : ''}`);
+        auditLogger.log({
+          tokenId: token.id,
+          userId: token.userId,
+          providerId: provider.id,
+          logType: 'request',
+          action: path,
+          requestMethod: method,
+          ipAddress: clientIp,
+          userAgent,
+          responseStatus: 502,
+          responseTime: Date.now() - startTime,
+          isStream: true,
+          detail: JSON.stringify({ reason: 'Provider error', error: errMsg, cause: causeMsg }),
+          requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+        });
         failedProviderIds.push(provider.id);
         circuitBreaker.recordFailure(provider.id, provider.name);
       }
     }
 
     // All providers failed
+    const lastError = 'No providers could handle the request';
     auditLogger.log({
       tokenId: token.id,
       userId: token.userId,
@@ -580,7 +602,7 @@ async function handleRequest(
       requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
     });
     return NextResponse.json(
-      { type: 'error', error: { type: 'api_error', message: 'All providers failed' } },
+      { type: 'error', error: { type: 'api_error', message: 'All providers failed', detail: lastError } },
       { status: 502 }
     );
   }
@@ -610,12 +632,13 @@ async function handleRequest(
       }
     }
 
-    const apiKey = decrypt(provider.apiKeyEncrypted);
-    const url = resolveProxyUrl(provider.apiBaseUrl, path);
-    const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
-    const headers = buildUpstreamHeaders(apiKey);
-
     try {
+      const apiKey = decrypt(provider.apiKeyEncrypted);
+      const url = resolveProxyUrl(provider.apiBaseUrl, path);
+      auditLogger.log({ logType: 'debug', action: 'anthropic_forward', detail: url, providerId: provider.id });
+      const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
+      const headers = buildUpstreamHeaders(apiKey);
+
       const bodySize = redirectedBody ? new Blob([JSON.stringify(redirectedBody)]).size : 0;
       const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, bodySize, false);
       const controller = new AbortController();
@@ -631,7 +654,9 @@ async function handleRequest(
         });
       } catch (fetchErr: any) {
         clearTimeout(timer);
-        throw new Error(`Upstream request failed: ${fetchErr.name === 'AbortError' ? 'timeout' : fetchErr.message}`);
+        const errMsg = fetchErr.name === 'AbortError' ? 'timeout' : fetchErr.message;
+        const cause = fetchErr.cause?.message || '';
+        throw new Error(`Upstream request failed: ${errMsg}${cause ? ` (${cause})` : ''}`, { cause: fetchErr });
       }
       clearTimeout(timer);
 
@@ -713,7 +738,24 @@ async function handleRequest(
 
       failedProviderIds.push(provider.id);
       circuitBreaker.recordFailure(provider.id, provider.name);
-    } catch (error) {
+    } catch (error: any) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      const causeMsg = error?.cause?.message || '';
+      console.error(`[Anthropic] Provider ${provider.id} (${provider.name}) failed: ${errMsg}${causeMsg ? ` — cause: ${causeMsg}` : ''}`);
+      auditLogger.log({
+        tokenId: token.id,
+        userId: token.userId,
+        providerId: provider.id,
+        logType: 'request',
+        action: path,
+        requestMethod: method,
+        ipAddress: clientIp,
+        userAgent,
+        responseStatus: 502,
+        responseTime: Date.now() - startTime,
+        detail: JSON.stringify({ reason: 'Provider error', error: errMsg, cause: causeMsg }),
+        requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+      });
       failedProviderIds.push(provider.id);
       circuitBreaker.recordFailure(provider.id, provider.name);
     }
@@ -740,7 +782,7 @@ async function handleRequest(
   });
 
   return NextResponse.json(
-    { type: 'error', error: { type: 'api_error', message: 'All providers failed' } },
+    { type: 'error', error: { type: 'api_error', message: 'All providers failed', detail: 'No providers could handle the request' } },
     { status: 502 }
   );
 }
