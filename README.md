@@ -1,99 +1,66 @@
 # 智链 AI 网关 | LinkAI Gateway
 
-智链 AI 网关是一款面向企业和个人用户的大模型安全接入网关，专注于调用过程中的**安全防护、数据脱敏、全链路审计与容灾保障**，让每一次 AI 调用都安全可追溯、稳定不掉线。
+> **保护每一次 AI 调用的隐私安全** — 面向企业和个人的大模型安全接入网关
 
-平台以**令牌路由**为核心机制，让团队管理者统一管控提供商资源、用量配额和安全策略，让每位成员在权限范围内自助创建令牌、选择模型提供商、配置容灾切换，兼顾安全管控与灵活使用。
+智链 AI 网关在统一代理转发大模型 API 的基础上，内置**数据脱敏、隐私保护、全链路审计**三大安全能力，确保敏感信息不泄露、每次调用可追溯。支持 OpenAI、Anthropic、Azure、通义千问、DeepSeek 等主流提供商，三态熔断器保障高可用。
 
 ![截图预览](public/screenshot.png)
 
 ![截图预览2](public/screenshot2.png)
 
-## 🚀 功能特点
+## 🛡️ 核心亮点
 
-* **统一代理转发**：对外暴露 OpenAI 兼容 API 格式，业务/AI 工具仅需替换 `base_url` 和 `api_key` 即可接入
-* **多提供商支持**：支持 OpenAI、Azure OpenAI、Anthropic、通义千问、DeepSeek 等主流大模型提供商，内置协议适配器
-* **全链路容灾自愈**：三态熔断器 + 健康探测引擎 + 自动切换备用提供商，保障 AI 调用高可用
-* **双层脱敏引擎**：管理员全局强制脱敏 + 用户自定义脱敏规则，支持关键字/正则匹配，防敏感数据泄露
-* **分层配额管控**：用户配额 > 令牌配额 > 提供商配额，多层级用量管控，超额自动熔断
-* **全链路审计日志**：链式哈希防篡改审计日志，支持完整请求/响应记录，合规可追溯
-* **多角色权限体系**：超级管理员 + 普通用户，分层管控兼顾安全与效率
-* **零改造接入**：统一入口 + 令牌路由，业务端无需代码改造
-* **轻量级部署**：SQLite 数据库 + Docker 一键部署，无需外部中间件依赖
+- **双层脱敏引擎** — 管理员全局强制脱敏 + 用户自定义规则，关键字/正则匹配，敏感数据在请求发出前自动替换，**绝不会到达上游提供商**
+- **链式哈希审计日志** — 每条审计日志通过哈希链关联，防篡改防删除，完整记录请求/响应，满足合规审查需求
+- **零信任令牌体系** — 每个成员独立令牌，分层配额管控，超额自动熔断，兼顾安全管控与灵活使用
+- **全链路容灾自愈** — 三态熔断器 + 健康探测 + 自动切换备用提供商，AI 调用稳定不掉线
+- **多协议原生透传** — 支持 OpenAI 兼容、Anthropic 原生协议，业务端零改造接入
 
-## 📸 截图预览
+## 🚀 功能一览
 
-> 待补充
+| 能力 | 说明 |
+|------|------|
+| 统一代理转发 | 对外暴露 OpenAI 兼容 API，替换 `base_url` 和 `api_key` 即可接入 |
+| 多提供商支持 | OpenAI、Azure OpenAI、Anthropic、通义千问、DeepSeek 等，内置协议适配器 |
+| 数据脱敏 | 双层引擎，支持关键字/正则匹配，请求发出前自动替换敏感信息 |
+| 审计日志 | 链式哈希防篡改，完整请求/响应记录，合规可追溯 |
+| 配额管控 | 用户 > 令牌 > 提供商，多层级用量管控，超额自动熔断 |
+| 容灾自愈 | 三态熔断器 + 健康探测 + 自动故障转移 |
+| 多角色权限 | 超级管理员 + 普通用户，分层管控 |
+| 轻量部署 | SQLite + Docker 一键部署，无需外部中间件 |
 
-## 🔧 核心架构
+## 🔧 技术栈
 
-```
-┌─────────────────────────────────────────────────────┐
-│                   应用层 (Application)                │
-│  ┌──────────────────┐  ┌──────────────────────────┐ │
-│  │  管理员管控后台    │  │  普通用户自助控制台        │ │
-│  └──────────────────┘  └──────────────────────────┘ │
-├─────────────────────────────────────────────────────┤
-│                 权限管控层 (Authorization)             │
-│  用户管理 │ 角色权限 │ 开放范围控制 │ 配额校验 │ 强制规则 │
-├─────────────────────────────────────────────────────┤
-│                   引擎层 (Engine)                     │
-│  代理转发 │ 脱敏规则 │ 容灾自愈 │ 审计日志 │ 配额管控  │
-├─────────────────────────────────────────────────────┤
-│                   资源层 (Resource)                   │
-│         上游提供商资源池（统一配置、全局复用）             │
-└─────────────────────────────────────────────────────┘
-```
-
-## 🛠️ 技术栈
-
-* **全栈框架**：Next.js (App Router) 15.3
-* **UI 框架**：React 19 + Tailwind CSS 3.4
-* **语言**：TypeScript 5.x
-* **数据库**：SQLite (Prisma ORM)，WAL 模式，零运维
-* **认证**：NextAuth.js 4.24
-* **测试**：Vitest 3.1
-* **容器**：Docker + Docker Compose，支持 x86/ARM
+Next.js 15 (App Router) · React 19 · TypeScript 5 · Tailwind CSS 3 · Prisma ORM · SQLite (WAL) · NextAuth.js · Vitest · Docker
 
 ## 📦 安装与部署
 
-### 使用 Docker 部署（推荐）
+### Docker 一键部署（推荐）
 
 ```bash
-# 适用于 x86/x64 架构
+# x86/x64
 docker run -d --name link-ai --restart always -p 3333:3333 -v ~/link-ai_data:/app/data star7th/link-ai:latest
 
-# 适用于 ARM 架构（如树莓派、Apple Silicon）
+# ARM（树莓派、Apple Silicon）
 docker run -d --name link-ai --restart always -p 3333:3333 -v ~/link-ai_data:/app/data star7th/link-ai:arm-latest
 ```
 
-### 使用 Docker Compose 部署
+首次访问会引导创建管理员账户。
+
+### Docker Compose
 
 ```bash
-git clone https://github.com/star7th/link-ai.git
-cd link-ai
+git clone https://github.com/star7th/link-ai.git && cd link-ai
 docker compose up -d
 ```
 
 ### 开发环境
 
 ```bash
-# 安装依赖
-npm install
-
-# 配置环境变量
-cp .env.example .env
-
-# 启动开发服务器
-npm run dev
+npm install && cp .env.example .env && npm run dev
 ```
 
-访问 http://localhost:3333 开始使用。
-
-### 初始化说明
-
-首次启动时，系统会自动：
-1. 检查数据库是否存在，不存在则自动初始化数据库结构
-2. 首次访问时，系统会引导你创建管理员账户
+访问 http://localhost:3333
 
 ## 🔄 更新说明
 
@@ -117,50 +84,25 @@ docker run -d --name link-ai --restart always -p 3333:3333 -v ~/link-ai_data:/ap
 
 ```
 src/
-├── app/                        # Next.js App Router 页面与 API
-│   ├── dashboard/              # 用户控制台
-│   ├── admin/                  # 管理员后台
-│   ├── auth/                   # 认证相关页面
-│   └── api/
-│       ├── proxy/              # AI 代理转发核心路由
-│       ├── admin/              # 管理员 API
-│       └── user/               # 用户 API
-├── components/                 # React 组件
-│   ├── ui/                     # 基础 UI 组件
-│   ├── layout/                 # 布局组件
-│   ├── provider/               # 提供商相关组件
-│   ├── token/                  # 令牌相关组件
-│   └── audit/                  # 审计日志组件
+├── app/                    # 页面与 API（dashboard / admin / auth / api）
+├── components/             # UI 组件
 ├── lib/
-│   ├── proxy/                  # 代理转发引擎
-│   │   ├── engine.ts           # 代理核心引擎
-│   │   ├── stream.ts           # 流式响应处理
-│   │   └── adapter/            # 提供商协议适配器
-│   ├── desensitize/            # 脱敏引擎
-│   ├── failover/               # 容灾引擎（熔断器、健康探测）
-│   ├── quota/                  # 配额引擎
-│   └── audit/                  # 审计引擎
-├── context/                    # React 上下文
-└── types/                      # TypeScript 类型定义
+│   ├── proxy/              # 代理转发引擎（engine / stream / adapter）
+│   ├── desensitize/        # 脱敏引擎
+│   ├── failover/           # 容灾引擎（熔断器、健康探测）
+│   ├── quota/              # 配额引擎
+│   └── audit/              # 审计引擎
+└── types/                  # TypeScript 类型
 ```
 
-## 🌍 贡献指南
+## 🤝 贡献
 
-欢迎贡献代码！请随时提交 Pull Request。
-
-1. Fork 仓库
-2. 创建功能分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m '添加某项功能'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 打开 Pull Request
+欢迎 PR！Fork → 分支开发 → 提交 PR。
 
 ## 📄 许可证
 
-本项目基于 Apache License 2.0 许可证开源 - 详情请查看 LICENSE 文件。
+[Apache License 2.0](LICENSE)
 
 ## 🔗 链接
 
-* GitHub 仓库: https://github.com/star7th/link-ai
-
-## Contributing
-Contributions are welcome.
+GitHub: https://github.com/star7th/link-ai
