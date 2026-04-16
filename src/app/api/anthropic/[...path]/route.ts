@@ -451,7 +451,6 @@ async function handleRequest(
       const url = resolveProxyUrl(provider.apiBaseUrl, path);
       try {
         const apiKey = decrypt(provider.apiKeyEncrypted);
-        auditLogger.log({ logType: 'debug', action: 'anthropic_forward', detail: url, providerId: provider.id });
         const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
         const headers = buildUpstreamHeaders(apiKey);
 
@@ -661,7 +660,6 @@ async function handleRequest(
     const url = resolveProxyUrl(provider.apiBaseUrl, path);
     try {
       const apiKey = decrypt(provider.apiKeyEncrypted);
-      auditLogger.log({ logType: 'debug', action: 'anthropic_forward', detail: url, providerId: provider.id });
       const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
       const headers = buildUpstreamHeaders(apiKey);
 
