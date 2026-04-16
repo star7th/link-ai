@@ -296,13 +296,15 @@ model AuditLog {
   originalProviderId String?
   ipAddress          String?
   userAgent          String?
-  detail             String?
-   requestBody        String?
-   responseBody       String?
-   contentHash        String?
-   previousHash       String?
-   desensitizeHits    String?
-   createdAt          DateTime  @default(now())
+   detail             String?
+    requestBody        String?
+    responseBody       String?
+    upstreamUrl        String?
+    upstreamResponse   String?
+    contentHash        String?
+    previousHash       String?
+    desensitizeHits    String?
+    createdAt          DateTime  @default(now())
 
   user               User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   token              Token?    @relation(fields: [tokenId], references: [id], onDelete: SetNull)

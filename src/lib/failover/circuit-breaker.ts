@@ -45,9 +45,14 @@ async function persistState(providerId: string): Promise<void> {
   const data = circuits.get(providerId);
   if (!data) return;
   try {
-    await prisma.failoverConfig.update({
+    await prisma.failoverConfig.upsert({
       where: { providerId },
-      data: {
+      update: {
+        circuitState: data.state,
+        circuitStateSince: data.since ? new Date(data.since) : null,
+      },
+      create: {
+        providerId,
         circuitState: data.state,
         circuitStateSince: data.since ? new Date(data.since) : null,
       },

@@ -23,6 +23,8 @@ type AuditLogEntry = {
   detail?: string;
   requestBody?: string;
   responseBody?: string;
+  upstreamUrl?: string;
+  upstreamResponse?: string;
   desensitizeHits?: string;
 };
 
@@ -117,6 +119,8 @@ class AuditLogger {
           detail: e.detail,
           requestBody: e.requestBody,
           responseBody: e.responseBody,
+          upstreamUrl: e.upstreamUrl,
+          upstreamResponse: e.upstreamResponse,
           desensitizeHits: e.desensitizeHits,
           contentHash: e.contentHash,
           previousHash: e.previousHash,

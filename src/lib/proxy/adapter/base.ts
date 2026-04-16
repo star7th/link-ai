@@ -89,14 +89,14 @@ export abstract class BaseAdapter {
   protected async doForward(request: ProxyRequest): Promise<ProxyResponse> {
     const url = this.buildUrl(request.path);
     const { authorization, host, 'content-length': _cl, 'content-type': _ct, connection, 'x-forwarded-for': _xff, 'x-real-ip': _xri, ...restHeaders } = request.headers;
-    const headers = {
+    const headers: Record<string, string> = {
       ...restHeaders,
       'Authorization': this.getAuthorizationHeader(),
       'Content-Type': 'application/json'
     };
 
-    const bodySize = request.body ? new Blob([JSON.stringify(request.body)]).size : 0;
-    const timeoutMs = request.timeoutMs ?? calculateDynamicTimeout(bodySize, false);
+    const encodedBody = request.body ? new Blob([JSON.stringify(request.body)], { type: 'application/json' }) : null;
+    const timeoutMs = request.timeoutMs ?? calculateDynamicTimeout(encodedBody?.size ?? 0, false);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -105,7 +105,7 @@ export abstract class BaseAdapter {
       response = await fetch(url, {
         method: request.method,
         headers,
-        body: request.body ? JSON.stringify(request.body) : undefined,
+        body: encodedBody,
         signal: controller.signal
       });
     } catch (err: any) {

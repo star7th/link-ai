@@ -473,8 +473,8 @@ async function handleRequest(
         };
 
         try {
-          const bodySize = new Blob([JSON.stringify(redirectedBody)]).size;
-          const timeoutMs = resolveTimeout(tp.provider.timeoutMs, tp.provider.streamTimeoutMs, bodySize, true);
+          const encodedBody = redirectedBody ? new Blob([JSON.stringify(redirectedBody)], { type: 'application/json' }) : undefined;
+          const timeoutMs = resolveTimeout(tp.provider.timeoutMs, tp.provider.streamTimeoutMs, encodedBody?.size ?? 0, true);
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -483,7 +483,7 @@ async function handleRequest(
             upstream = await fetch(url, {
               method: request.method,
               headers,
-              body: JSON.stringify(redirectedBody),
+              body: encodedBody,
               signal: controller.signal
             });
           } catch (fetchErr: any) {
@@ -562,6 +562,7 @@ async function handleRequest(
                     detail: JSON.stringify({ reason: 'Stream interrupted', error: error instanceof Error ? error.message : String(error) }),
                     requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
                     responseBody: error instanceof Error ? error.message : String(error),
+                    upstreamUrl: url,
                   });
                 }
               }
@@ -589,6 +590,7 @@ async function handleRequest(
             detail: JSON.stringify({ reason: 'Single provider failed', error: errMsg }),
             requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
             responseBody: errMsg,
+            upstreamUrl: url,
           });
           return NextResponse.json({ error: 'Single provider failed' }, { status: 502 });
         }
@@ -640,8 +642,8 @@ async function handleRequest(
         };
 
         try {
-          const bodySize = new Blob([JSON.stringify(redirectedBody)]).size;
-          const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, bodySize, true);
+          const encodedBody = redirectedBody ? new Blob([JSON.stringify(redirectedBody)], { type: 'application/json' }) : undefined;
+          const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, encodedBody?.size ?? 0, true);
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -650,7 +652,7 @@ async function handleRequest(
             upstream = await fetch(url, {
               method: request.method,
               headers,
-              body: JSON.stringify(redirectedBody),
+              body: encodedBody,
               signal: controller.signal
             });
           } catch (fetchErr: any) {
@@ -734,6 +736,7 @@ async function handleRequest(
                     detail: JSON.stringify({ reason: 'Stream interrupted', error: error instanceof Error ? error.message : String(error) }),
                     requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
                     responseBody: error instanceof Error ? error.message : String(error),
+                    upstreamUrl: url,
                   });
                 }
               }
@@ -742,8 +745,27 @@ async function handleRequest(
             return stream;
           }
 
+          let upstreamRespBody: string | undefined;
+          try { upstreamRespBody = (await upstream.text()).slice(0, 50000); } catch {}
           failedProviderIds.push(tp.provider.id);
           circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
+          auditLogger.log({
+            tokenId: token.id,
+            userId: token.userId,
+            providerId: tp.provider.id,
+            logType: 'request',
+            action: path,
+            requestMethod: method,
+            responseStatus: upstream.status,
+            responseTime: Date.now() - startTime,
+            isStream: true,
+            ipAddress: clientIp,
+            userAgent,
+            detail: JSON.stringify({ reason: 'Provider returned non-ok status', status: upstream.status }),
+            requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+            upstreamUrl: url,
+            upstreamResponse: upstreamRespBody,
+          });
         } catch (error) {
           failedProviderIds.push(tp.provider.id);
           circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
@@ -873,6 +895,8 @@ async function handleRequest(
       detail: JSON.stringify({ error: errorMsg }),
       requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
       responseBody: errorMsg,
+      upstreamUrl: error?.upstreamUrl,
+      upstreamResponse: error?.upstreamResponse || errorMsg,
     });
 
     return NextResponse.json({ error: 'Proxy request failed' }, { status: 502 });

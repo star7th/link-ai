@@ -22,6 +22,9 @@ interface AuditLog {
   createdAt: string;
   requestBody?: string;
   responseBody?: string;
+  detail?: string;
+  upstreamUrl?: string;
+  upstreamResponse?: string;
   desensitizeHits?: string;
   user: { username: string } | null;
   token: { name: string; keyPrefix: string } | null;
@@ -113,7 +116,31 @@ function LogDetailModal({
               </pre>
             </div>
           )}
-          {!log.requestBody && !log.responseBody && !log.desensitizeHits && (
+          {log.responseStatus >= 400 && log.upstreamUrl && (
+            <div>
+              <div className="text-sm font-medium mb-1">上游URL</div>
+              <pre className="text-xs bg-primary/5 dark:bg-primary/10 border border-primary/15 rounded-md p-3 overflow-x-auto max-h-[300px] overflow-y-auto whitespace-pre-wrap break-all">
+                {log.upstreamUrl}
+              </pre>
+            </div>
+          )}
+          {log.responseStatus >= 400 && (tryFormatJson(log.upstreamResponse)) && (
+            <div>
+              <div className="text-sm font-medium mb-1">上游响应</div>
+              <pre className="text-xs bg-error/5 dark:bg-error/10 border border-error/20 rounded-md p-3 overflow-x-auto max-h-[300px] overflow-y-auto whitespace-pre-wrap break-all">
+                {tryFormatJson(log.upstreamResponse)}
+              </pre>
+            </div>
+          )}
+          {log.responseStatus >= 400 && (tryFormatJson(log.detail)) && (
+            <div>
+              <div className="text-sm font-medium mb-1">详细信息</div>
+              <pre className="text-xs bg-primary/5 dark:bg-primary/10 border border-primary/15 rounded-md p-3 overflow-x-auto max-h-[300px] overflow-y-auto whitespace-pre-wrap break-all">
+                {tryFormatJson(log.detail)}
+              </pre>
+            </div>
+          )}
+          {!log.requestBody && !log.responseBody && !log.desensitizeHits && !(log.responseStatus >= 400 && (log.upstreamUrl || log.upstreamResponse || log.detail)) && (
             <div className="text-sm text-muted-foreground text-center py-4">
               未记录请求/响应内容（需开启"记录完整请求/响应"开关）
             </div>

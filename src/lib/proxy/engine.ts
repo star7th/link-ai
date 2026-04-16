@@ -4,6 +4,7 @@ import { AnthropicAdapter } from '@/lib/proxy/adapter/anthropic';
 import { AzureAdapter } from '@/lib/proxy/adapter/azure';
 import { DashScopeAdapter } from '@/lib/proxy/adapter/dashscope';
 import { CustomAdapter } from '@/lib/proxy/adapter/custom';
+import { resolveProxyUrl } from '@/lib/proxy/adapter/base';
 import { ProviderConfig, ProxyRequest, ProxyResponse } from '@/lib/proxy/adapter/base';
 import { resolveTimeout } from '@/lib/proxy/timeout';
 import { circuitBreaker } from '@/lib/failover/circuit-breaker';
@@ -133,9 +134,18 @@ export class ProxyEngine {
           return { response, providerId: provider.id, failover: false, streamed: false };
         }
         circuitBreaker.recordFailure(provider.id, provider.name);
-        throw new Error(`Provider ${provider.name} returned ${response.status}`);
+        const err: any = new Error(`Provider ${provider.name} returned ${response.status}`);
+        err.upstreamUrl = resolveProxyUrl(provider.apiBaseUrl, path);
+        throw err;
       } catch (error) {
         circuitBreaker.recordFailure(provider.id, provider.name);
+        if (error instanceof Error && !(error as any).upstreamUrl) {
+          (error as any).upstreamUrl = resolveProxyUrl(provider.apiBaseUrl, path);
+        }
+        if (error instanceof Error && !(error as any).upstreamResponse) {
+          const causeMsg = (error as any)?.cause?.message || (error as any)?.cause?.code || '';
+          (error as any).upstreamResponse = causeMsg ? `${error.message}: ${causeMsg}` : error.message;
+        }
         throw error instanceof Error ? error : new Error(`Provider ${provider.name} request failed`);
       }
     }
@@ -186,6 +196,7 @@ export class ProxyEngine {
 
       try {
         const response = await this.forwardToProvider(provider, path, method, headers, body);
+        const upstreamUrl = resolveProxyUrl(provider.apiBaseUrl, path);
 
         // Whitelist: only 2xx is considered success.
         // Anything else (3xx, 4xx, 5xx) triggers failover.
@@ -198,10 +209,20 @@ export class ProxyEngine {
         }
 
         circuitBreaker.recordFailure(provider.id, provider.name);
-        lastError = new Error(`Provider ${provider.name} returned ${response.status}`);
+        const err: any = new Error(`Provider ${provider.name} returned ${response.status}`);
+        err.upstreamUrl = upstreamUrl;
+        err.upstreamResponse = response.body ? JSON.stringify(response.body).slice(0, 50000) : undefined;
+        lastError = err;
         failover = true;
-      } catch (error) {
+      } catch (error: any) {
         circuitBreaker.recordFailure(provider.id, provider.name);
+        if (!error.upstreamUrl) {
+          error.upstreamUrl = resolveProxyUrl(provider.apiBaseUrl, path);
+        }
+        if (!error.upstreamResponse) {
+          const causeMsg = error?.cause?.message || error?.cause?.code || '';
+          error.upstreamResponse = causeMsg ? `${error.message}: ${causeMsg}` : error.message;
+        }
         lastError = error instanceof Error ? error : new Error(`Provider ${provider.name} request failed`);
         failover = true;
       }

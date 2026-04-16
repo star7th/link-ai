@@ -53,15 +53,17 @@ export class DashScopeAdapter extends BaseAdapter {
   async forward(request: ProxyRequest): Promise<ProxyResponse> {
     const url = this.buildUrl(request.path);
     const adaptedBody = this.adaptRequestBody(request.body);
+    const finalHeaders: Record<string, string> = {
+      ...Object.fromEntries(Object.entries(request.headers).filter(([k]) => k !== 'content-type')),
+      'Authorization': this.getAuthorizationHeader(),
+      'Content-Type': 'application/json'
+    };
+    const encodedBody = adaptedBody ? new Blob([JSON.stringify(adaptedBody)], { type: 'application/json' }) : undefined;
 
     const response = await fetch(url, {
       method: request.method,
-      headers: {
-        ...Object.fromEntries(Object.entries(request.headers).filter(([k]) => k !== 'content-type')),
-        'Authorization': this.getAuthorizationHeader(),
-        'Content-Type': 'application/json'
-      },
-      body: adaptedBody ? JSON.stringify(adaptedBody) : undefined
+      headers: finalHeaders,
+      body: encodedBody
     });
 
     const headersObj: Record<string, string> = {};

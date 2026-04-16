@@ -64,17 +64,19 @@ export class AnthropicAdapter extends BaseAdapter {
     const adaptedBody = this.adaptRequestBody(request.body);
 
     const { 'content-type': _ct, ...restHeaders } = request.headers;
-    const headers = {
+    const headers: Record<string, string> = {
       ...restHeaders,
       'x-api-key': this.apiKey,
       'anthropic-version': '2023-06-01',
       'Content-Type': 'application/json'
     };
 
+    const encodedBody = adaptedBody ? new Blob([JSON.stringify(adaptedBody)], { type: 'application/json' }) : undefined;
+
     const response = await fetch(url, {
       method: request.method,
       headers,
-      body: adaptedBody ? JSON.stringify(adaptedBody) : undefined
+      body: encodedBody
     });
 
     const headersObj: Record<string, string> = {};

@@ -399,6 +399,13 @@ async function handleRequest(
   const anthropicVersion = request.headers.get('anthropic-version') || '2023-06-01';
   const anthropicBeta = request.headers.get('anthropic-beta');
 
+  function encodeBody(obj: any): { body: Blob; size: number } | null {
+    if (obj == null) return null;
+    const str = JSON.stringify(obj);
+    const blob = new Blob([str], { type: 'application/json' });
+    return { body: blob, size: blob.size };
+  }
+
   function buildUpstreamHeaders(apiKey: string): Record<string, string> {
     const headers: Record<string, string> = {
       'x-api-key': apiKey,
@@ -448,15 +455,15 @@ async function handleRequest(
         continue;
       }
 
+      const url = resolveProxyUrl(provider.apiBaseUrl, path);
       try {
         const apiKey = decrypt(provider.apiKeyEncrypted);
-        const url = resolveProxyUrl(provider.apiBaseUrl, path);
         auditLogger.log({ logType: 'debug', action: 'anthropic_forward', detail: url, providerId: provider.id });
         const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
+        const encoded = encodeBody(redirectedBody);
         const headers = buildUpstreamHeaders(apiKey);
 
-        const bodySize = new Blob([JSON.stringify(redirectedBody)]).size;
-        const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, bodySize, true);
+        const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, encoded?.size ?? 0, true);
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -465,7 +472,7 @@ async function handleRequest(
           upstream = await fetch(url, {
             method: request.method,
             headers,
-            body: JSON.stringify(redirectedBody),
+            body: encoded?.body,
             signal: controller.signal
           });
         } catch (fetchErr: any) {
@@ -547,6 +554,7 @@ async function handleRequest(
                   detail: JSON.stringify({ reason: 'Stream interrupted', error: error instanceof Error ? error.message : String(error) }),
                   requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
                   responseBody: error instanceof Error ? error.message : String(error),
+                  upstreamUrl: url,
                 });
               }
             }
@@ -555,8 +563,27 @@ async function handleRequest(
           return stream;
         }
 
+        let upstreamRespBody: string | undefined;
+        try { upstreamRespBody = (await upstream.text()).slice(0, 50000); } catch {}
         failedProviderIds.push(provider.id);
         circuitBreaker.recordFailure(provider.id, provider.name);
+        auditLogger.log({
+          tokenId: token.id,
+          userId: token.userId,
+          providerId: provider.id,
+          logType: 'request',
+          action: path,
+          requestMethod: method,
+          ipAddress: clientIp,
+          userAgent,
+          responseStatus: upstream.status,
+          responseTime: Date.now() - startTime,
+          isStream: true,
+          detail: JSON.stringify({ reason: 'Provider returned non-ok status', status: upstream.status }),
+          requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+          upstreamUrl: url,
+          upstreamResponse: upstreamRespBody,
+        });
       } catch (error: any) {
         const errMsg = error instanceof Error ? error.message : String(error);
         const causeMsg = error?.cause?.message || '';
@@ -575,6 +602,8 @@ async function handleRequest(
           isStream: true,
           detail: JSON.stringify({ reason: 'Provider error', error: errMsg, cause: causeMsg }),
           requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+          upstreamUrl: url,
+          upstreamResponse: errMsg,
         });
         failedProviderIds.push(provider.id);
         circuitBreaker.recordFailure(provider.id, provider.name);
@@ -632,15 +661,15 @@ async function handleRequest(
       }
     }
 
+    const url = resolveProxyUrl(provider.apiBaseUrl, path);
     try {
       const apiKey = decrypt(provider.apiKeyEncrypted);
-      const url = resolveProxyUrl(provider.apiBaseUrl, path);
       auditLogger.log({ logType: 'debug', action: 'anthropic_forward', detail: url, providerId: provider.id });
       const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
+      const encoded = encodeBody(redirectedBody);
       const headers = buildUpstreamHeaders(apiKey);
 
-      const bodySize = redirectedBody ? new Blob([JSON.stringify(redirectedBody)]).size : 0;
-      const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, bodySize, false);
+      const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, encoded?.size ?? 0, false);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -649,7 +678,7 @@ async function handleRequest(
         upstream = await fetch(url, {
           method: request.method,
           headers,
-          body: redirectedBody ? JSON.stringify(redirectedBody) : undefined,
+          body: encoded?.body,
           signal: controller.signal
         });
       } catch (fetchErr: any) {
@@ -736,8 +765,26 @@ async function handleRequest(
         });
       }
 
+      let upstreamRespBody: string | undefined;
+      try { upstreamRespBody = (await upstream.text()).slice(0, 50000); } catch {}
       failedProviderIds.push(provider.id);
       circuitBreaker.recordFailure(provider.id, provider.name);
+      auditLogger.log({
+        tokenId: token.id,
+        userId: token.userId,
+        providerId: provider.id,
+        logType: 'request',
+        action: path,
+        requestMethod: method,
+        ipAddress: clientIp,
+        userAgent,
+        responseStatus: upstream.status,
+        responseTime: Date.now() - startTime,
+        detail: JSON.stringify({ reason: 'Provider returned non-ok status', status: upstream.status }),
+        requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+        upstreamUrl: url,
+        upstreamResponse: upstreamRespBody,
+      });
     } catch (error: any) {
       const errMsg = error instanceof Error ? error.message : String(error);
       const causeMsg = error?.cause?.message || '';
@@ -755,6 +802,8 @@ async function handleRequest(
         responseTime: Date.now() - startTime,
         detail: JSON.stringify({ reason: 'Provider error', error: errMsg, cause: causeMsg }),
         requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+        upstreamUrl: url,
+        upstreamResponse: errMsg,
       });
       failedProviderIds.push(provider.id);
       circuitBreaker.recordFailure(provider.id, provider.name);

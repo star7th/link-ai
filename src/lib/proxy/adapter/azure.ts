@@ -17,16 +17,18 @@ export class AzureAdapter extends BaseAdapter {
   async forward(request: ProxyRequest): Promise<ProxyResponse> {
     const url = this.buildUrl(request.path);
     const { 'content-type': _ct, ...restHeaders } = request.headers;
-    const headers = {
+    const headers: Record<string, string> = {
       ...restHeaders,
       'api-key': this.apiKey,
       'Content-Type': 'application/json'
     };
 
+    const encodedBody = request.body ? new Blob([JSON.stringify(request.body)], { type: 'application/json' }) : undefined;
+
     const response = await fetch(url, {
       method: request.method,
       headers,
-      body: request.body ? JSON.stringify(request.body) : undefined
+      body: encodedBody
     });
 
     const headersObj: Record<string, string> = {};

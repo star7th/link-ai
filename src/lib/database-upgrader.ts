@@ -628,6 +628,22 @@ const DB_VERSIONS = [
         await prisma.$executeRawUnsafe(`ALTER TABLE "FailoverConfig" ADD COLUMN "circuitStateSince" DATETIME;`);
       }
     }
+  },
+  {
+    version: 18,
+    name: '审计日志增加上游URL和响应字段',
+    check: async () => {
+      return await hasColumn('AuditLog', 'upstreamUrl') &&
+             await hasColumn('AuditLog', 'upstreamResponse');
+    },
+    upgrade: async () => {
+      if (!await hasColumn('AuditLog', 'upstreamUrl')) {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" ADD COLUMN "upstreamUrl" TEXT;`);
+      }
+      if (!await hasColumn('AuditLog', 'upstreamResponse')) {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" ADD COLUMN "upstreamResponse" TEXT;`);
+      }
+    }
   }
 ];
 
