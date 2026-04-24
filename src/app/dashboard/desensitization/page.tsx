@@ -27,6 +27,7 @@ interface RuleForm {
   pattern: string;
   replacement: string;
   action: string;
+  isEnabled: boolean;
 }
 
 const RULE_TYPES = [
@@ -63,6 +64,7 @@ function CreateRuleModal({
     pattern: "",
     replacement: "",
     action: "replace",
+    isEnabled: true,
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -99,7 +101,7 @@ function CreateRuleModal({
         const data = await res.json();
         throw new Error(data.error || "创建规则失败");
       }
-      setForm({ name: "", ruleType: "regex", pattern: "", replacement: "", action: "replace" });
+      setForm({ name: "", ruleType: "regex", pattern: "", replacement: "", action: "replace", isEnabled: true });
       onSuccess();
       onClose();
     } catch (err: unknown) {
@@ -245,6 +247,7 @@ function EditRuleModal({
     pattern: "",
     replacement: "",
     action: "replace",
+    isEnabled: true,
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -262,6 +265,7 @@ function EditRuleModal({
         pattern: rule.pattern,
         replacement: rule.replacement,
         action: rule.action,
+        isEnabled: rule.isEnabled,
       });
       setError("");
     }
@@ -397,6 +401,18 @@ function EditRuleModal({
                 ))}
               </select>
             </div>
+            <div className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                id="editRuleIsEnabled"
+                checked={form.isEnabled}
+                onChange={(e) => setForm({ ...form, isEnabled: e.target.checked })}
+                className="h-4 w-4 form-checkbox"
+              />
+              <label htmlFor="editRuleIsEnabled" className="text-sm font-medium">
+                启用
+              </label>
+            </div>
             {error && <p className="text-sm text-error">{error}</p>}
             <div className="flex justify-end space-x-3 pt-2">
               <Button type="button" variant="outline" onClick={onClose}>
@@ -447,6 +463,19 @@ export default function DesensitizationPage() {
   useEffect(() => {
     fetchRules();
   }, [fetchRules]);
+
+  const handleToggleRuleEnabled = async (rule: DesensitizeRule) => {
+    try {
+      const res = await fetch(`/api/user/desensitize/rules/${rule.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isEnabled: !rule.isEnabled }),
+      });
+      if (res.ok) fetchRules();
+    } catch {
+      // ignore
+    }
+  };
 
   const handleDelete = (rule: DesensitizeRule) => {
     setConfirmDialog({
@@ -541,15 +570,18 @@ export default function DesensitizationPage() {
                         </span>
                       </td>
                       <td className="py-3 px-4">
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                            rule.isEnabled
-                              ? "bg-success/10 text-success dark:bg-success/15 dark:text-success"
-                              : "bg-error/10 text-error dark:bg-error/15 dark:text-error"
+                        <button
+                          onClick={() => handleToggleRuleEnabled(rule)}
+                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                            rule.isEnabled ? "bg-primary" : "bg-light-nav dark:bg-dark-nav"
                           }`}
                         >
-                          {rule.isEnabled ? "启用" : "禁用"}
-                        </span>
+                          <span
+                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                              rule.isEnabled ? "translate-x-6" : "translate-x-1"
+                            }`}
+                          />
+                        </button>
                       </td>
                       <td className="py-3 px-4">
                         <div className="flex items-center justify-end gap-1">
