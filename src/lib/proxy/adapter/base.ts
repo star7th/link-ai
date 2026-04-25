@@ -125,7 +125,12 @@ export abstract class BaseAdapter {
     if (contentType.includes('application/json')) {
       body = await response.json();
     } else {
-      body = await response.text();
+      const text = await response.text();
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = text;
+      }
     }
 
     return {

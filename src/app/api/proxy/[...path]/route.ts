@@ -807,8 +807,11 @@ async function handleRequest(
     const responseTime = Date.now() - startTime;
     const responseHeaders = new Headers();
 
+    const skipHeaders = new Set([
+      'content-encoding', 'content-length', 'content-type', 'transfer-encoding',
+    ]);
     for (const [key, value] of Object.entries(result.response.headers)) {
-      if (key !== 'content-encoding' && key !== 'transfer-encoding') {
+      if (!skipHeaders.has(key)) {
         responseHeaders.set(key, value);
       }
     }
