@@ -901,7 +901,7 @@ async function handleRequest(
       requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
       responseBody: errorMsg,
       upstreamUrl: error?.upstreamUrl,
-      upstreamResponse: error?.upstreamResponse || errorMsg,
+      upstreamResponse: error?.isSystemError ? undefined : (error?.upstreamResponse || errorMsg),
     });
 
     return NextResponse.json({ error: 'Proxy request failed' }, { status: 502 });

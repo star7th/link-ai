@@ -216,9 +216,10 @@ export const circuitBreaker = {
     circuits.clear();
   },
 
-  // 健康检查专用通道：不干扰用户请求的错误率统计
-  // 健康检查成功时，只更新 Provider 的 healthStatus，不自动恢复熔断器
   async recordHealthSuccess(providerId: string, providerName?: string): Promise<void> {
+    const data = circuits.get(providerId);
+    const stateBefore = data?.state;
+
     try {
       await prisma.provider.update({
         where: { id: providerId },
@@ -226,6 +227,41 @@ export const circuitBreaker = {
       });
     } catch (error) {
       console.error(`[CircuitBreaker] 健康检查成功状态更新失败 providerId=${providerId}:`, error);
+    }
+
+    if (!data) return;
+    if (data.state !== stateBefore) return;
+
+    if (data.state === 'open') {
+      if (isInObservation(providerId)) return;
+      const oldState = data.state;
+      data.state = 'half_open';
+      data.since = Date.now();
+      data.halfOpenSince = Date.now();
+      data.successWindow = [];
+      data.failWindow = [];
+      persistState(providerId);
+      if (stateChangeCallback) {
+        stateChangeCallback(providerId, oldState, 'half_open', data.providerName);
+      }
+      return;
+    }
+
+    if (data.state === 'half_open') {
+      const config = this.getConfig(providerId);
+      const observeElapsed = Date.now() - data.halfOpenSince;
+      if (observeElapsed < config.recoveryObserveSeconds * 1000) return;
+      const oldState = data.state;
+      data.state = 'closed';
+      data.since = Date.now();
+      data.halfOpenSince = 0;
+      data.successWindow = [];
+      data.failWindow = [];
+      exitObservation(providerId);
+      persistState(providerId);
+      if (stateChangeCallback) {
+        stateChangeCallback(providerId, oldState, 'closed', data.providerName);
+      }
     }
   },
 

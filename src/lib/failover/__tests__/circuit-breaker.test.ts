@@ -36,6 +36,7 @@ vi.mock('../anti-flap', () => ({
 }));
 
 import { circuitBreaker, setStateChangeCallback, restoreState } from '../circuit-breaker';
+import { isInObservation, enterObservation, exitObservation } from '../anti-flap';
 
 beforeEach(() => {
   circuitBreaker.resetAll();
@@ -288,16 +289,74 @@ describe('circuitBreaker', () => {
       );
     });
 
-    it('does not change circuit state on health success', async () => {
-      // Record some failures to make circuit open
+    it('transitions open → half_open on health success', async () => {
       circuitBreaker.setConfig('p1', { minRequestCount: 2, errorThresholdPercent: 50 });
       circuitBreaker.recordFailure('p1');
       circuitBreaker.recordFailure('p1');
       expect(circuitBreaker.getState('p1')!.state).toBe('open');
 
-      // Health success should NOT recover the circuit
+      await circuitBreaker.recordHealthSuccess('p1');
+      expect(circuitBreaker.getState('p1')!.state).toBe('half_open');
+    });
+
+    it('respects anti-flap observation when recovering from open', async () => {
+      circuitBreaker.setConfig('p1', { minRequestCount: 2, errorThresholdPercent: 50 });
+      circuitBreaker.recordFailure('p1');
+      circuitBreaker.recordFailure('p1');
+      expect(circuitBreaker.getState('p1')!.state).toBe('open');
+
+      (isInObservation as ReturnType<typeof vi.fn>).mockReturnValueOnce(true);
       await circuitBreaker.recordHealthSuccess('p1');
       expect(circuitBreaker.getState('p1')!.state).toBe('open');
+
+      await circuitBreaker.recordHealthSuccess('p1');
+      expect(circuitBreaker.getState('p1')!.state).toBe('half_open');
+    });
+
+    it('transitions half_open → closed after recoveryObserveSeconds', async () => {
+      vi.useFakeTimers();
+      circuitBreaker.setConfig('p1', { minRequestCount: 2, errorThresholdPercent: 50, recoveryObserveSeconds: 10 });
+      circuitBreaker.recordFailure('p1');
+      circuitBreaker.recordFailure('p1');
+      expect(circuitBreaker.getState('p1')!.state).toBe('open');
+
+      await circuitBreaker.recordHealthSuccess('p1');
+      expect(circuitBreaker.getState('p1')!.state).toBe('half_open');
+
+      await circuitBreaker.recordHealthSuccess('p1');
+      expect(circuitBreaker.getState('p1')!.state).toBe('half_open');
+
+      vi.advanceTimersByTime(10 * 1000);
+
+      await circuitBreaker.recordHealthSuccess('p1');
+      expect(circuitBreaker.getState('p1')!.state).toBe('closed');
+      vi.useRealTimers();
+    });
+
+    it('does not change closed state on health success', async () => {
+      circuitBreaker.recordSuccess('p1');
+      expect(circuitBreaker.getState('p1')!.state).toBe('closed');
+
+      await circuitBreaker.recordHealthSuccess('p1');
+      expect(circuitBreaker.getState('p1')!.state).toBe('closed');
+    });
+
+    it('does not mutate state if it changed during async DB write', async () => {
+      let resolveUpdate: () => void;
+      mockProviderUpdate.mockImplementationOnce(() => new Promise<void>(r => { resolveUpdate = r; }));
+
+      circuitBreaker.setConfig('p1', { minRequestCount: 2, errorThresholdPercent: 50 });
+      circuitBreaker.recordFailure('p1');
+      circuitBreaker.recordFailure('p1');
+      expect(circuitBreaker.getState('p1')!.state).toBe('open');
+
+      const promise = circuitBreaker.recordHealthSuccess('p1');
+
+      circuitBreaker.getState('p1')!.state = 'closed';
+      resolveUpdate!();
+      await promise;
+
+      expect(circuitBreaker.getState('p1')!.state).toBe('closed');
     });
   });
 

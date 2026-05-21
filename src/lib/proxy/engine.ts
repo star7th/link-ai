@@ -158,7 +158,9 @@ export class ProxyEngine {
       await this.setupProviderConfig(provider.id);
 
       if (!circuitBreaker.isAvailable(provider.id)) {
-        lastError = new Error(`Provider ${provider.name} circuit is open`);
+        const err: any = new Error(`Provider ${provider.name} circuit is open`);
+        err.isSystemError = true;
+        lastError = err;
         failover = true;
         continue;
       }
@@ -168,7 +170,9 @@ export class ProxyEngine {
       if (providerConfig?.totalRpmLimit) {
         const rpmCheck = rateLimiter.check('provider', provider.id, 'rpm', providerConfig.totalRpmLimit);
         if (!rpmCheck.allowed) {
-          lastError = new Error(`Provider ${provider.name} RPM limit exceeded`);
+          const err: any = new Error(`Provider ${provider.name} RPM limit exceeded`);
+          err.isSystemError = true;
+          lastError = err;
           failover = true;
           continue;
         }
@@ -177,7 +181,9 @@ export class ProxyEngine {
       if (providerConfig?.totalTpmLimit) {
         const tpmCheck = rateLimiter.check('provider', provider.id, 'tpm', providerConfig.totalTpmLimit, 0);
         if (!tpmCheck.allowed) {
-          lastError = new Error(`Provider ${provider.name} TPM limit exceeded`);
+          const err: any = new Error(`Provider ${provider.name} TPM limit exceeded`);
+          err.isSystemError = true;
+          lastError = err;
           failover = true;
           continue;
         }
@@ -189,7 +195,9 @@ export class ProxyEngine {
       });
 
       if (!quotaCheck.allowed) {
-        lastError = new Error(`Provider ${provider.name} quota exceeded`);
+        const err: any = new Error(`Provider ${provider.name} quota exceeded`);
+        err.isSystemError = true;
+        lastError = err;
         failover = true;
         continue;
       }
