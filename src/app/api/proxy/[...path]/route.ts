@@ -456,6 +456,7 @@ async function handleRequest(
       }
 
       const failedProviderIds: string[] = [];
+      const failedProviderReasons: Record<string, string> = {};
 
       // Single provider: no failover, use 2-minute timeout
       if (providerList.length === 1) {
@@ -600,6 +601,7 @@ async function handleRequest(
       for (const tp of providerList) {
         if (!circuitBreaker.isAvailable(tp.provider.id)) {
           failedProviderIds.push(tp.provider.id);
+          failedProviderReasons[tp.provider.id] = 'circuit_open';
           continue;
         }
 
@@ -609,6 +611,7 @@ async function handleRequest(
           const rpmCheck = rateLimiter.check('provider', tp.provider.id, 'rpm', providerConfig.totalRpmLimit);
           if (!rpmCheck.allowed) {
             failedProviderIds.push(tp.provider.id);
+            failedProviderReasons[tp.provider.id] = 'rpm_limit';
             continue;
           }
         }
@@ -616,6 +619,7 @@ async function handleRequest(
           const tpmCheck = rateLimiter.check('provider', tp.provider.id, 'tpm', providerConfig.totalTpmLimit, 0);
           if (!tpmCheck.allowed) {
             failedProviderIds.push(tp.provider.id);
+            failedProviderReasons[tp.provider.id] = 'tpm_limit';
             continue;
           }
         }
@@ -627,6 +631,7 @@ async function handleRequest(
         });
         if (!providerQuotaCheck.allowed) {
           failedProviderIds.push(tp.provider.id);
+          failedProviderReasons[tp.provider.id] = 'quota_exceeded';
           continue;
         }
 
@@ -668,9 +673,25 @@ async function handleRequest(
             const buffered = await bufferUpstreamStream(upstream);
 
             if (!buffered) {
-              // Upstream errored during buffering window → failover
               failedProviderIds.push(tp.provider.id);
+              failedProviderReasons[tp.provider.id] = 'stream_buffer_failed';
               circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
+              auditLogger.log({
+                tokenId: token.id,
+                userId: token.userId,
+                providerId: tp.provider.id,
+                logType: 'request',
+                action: path,
+                requestMethod: method,
+                responseStatus: 502,
+                responseTime: Date.now() - startTime,
+                isStream: true,
+                ipAddress: clientIp,
+                userAgent,
+                detail: JSON.stringify({ reason: 'Stream buffer failed', provider: tp.provider.name }),
+                requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+                upstreamUrl: url,
+              });
               continue;
             }
 
@@ -750,6 +771,7 @@ async function handleRequest(
           let upstreamRespBody: string | undefined;
           try { upstreamRespBody = (await upstream.text()).slice(0, 50000); } catch {}
           failedProviderIds.push(tp.provider.id);
+          failedProviderReasons[tp.provider.id] = `http_${upstream.status}`;
           circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
           auditLogger.log({
             tokenId: token.id,
@@ -758,19 +780,39 @@ async function handleRequest(
             logType: 'request',
             action: path,
             requestMethod: method,
-            responseStatus: upstream.status,
+            responseStatus: 502,
             responseTime: Date.now() - startTime,
             isStream: true,
             ipAddress: clientIp,
             userAgent,
-            detail: JSON.stringify({ reason: 'Provider returned non-ok status', status: upstream.status }),
+            detail: JSON.stringify({ reason: 'Provider returned non-ok status', status: upstream.status, provider: tp.provider.name }),
             requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
             upstreamUrl: url,
             upstreamResponse: upstreamRespBody,
           });
         } catch (error) {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          const causeMsg = (error as any)?.cause?.message || (error as any)?.cause?.code || '';
           failedProviderIds.push(tp.provider.id);
+          failedProviderReasons[tp.provider.id] = errMsg;
           circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
+          auditLogger.log({
+            tokenId: token.id,
+            userId: token.userId,
+            providerId: tp.provider.id,
+            logType: 'request',
+            action: path,
+            requestMethod: method,
+            responseStatus: 502,
+            responseTime: Date.now() - startTime,
+            isStream: true,
+            ipAddress: clientIp,
+            userAgent,
+            detail: JSON.stringify({ reason: 'Provider request exception', provider: tp.provider.name, error: errMsg, cause: causeMsg }),
+            requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+            upstreamUrl: url,
+            upstreamResponse: causeMsg ? `${errMsg}: ${causeMsg}` : errMsg,
+          });
         }
       }
 
@@ -789,6 +831,7 @@ async function handleRequest(
           reason: 'All providers failed',
           providerCount: providerList.length,
           failedProviderIds,
+          failedProviderReasons,
           noProviderBound: providerList.length === 0
         }),
         requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,

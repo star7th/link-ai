@@ -485,6 +485,22 @@ async function handleRequest(
           if (!buffered) {
             failedProviderIds.push(provider.id);
             circuitBreaker.recordFailure(provider.id, provider.name);
+            auditLogger.log({
+              tokenId: token.id,
+              userId: token.userId,
+              providerId: provider.id,
+              logType: 'request',
+              action: path,
+              requestMethod: method,
+              responseStatus: 502,
+              responseTime: Date.now() - startTime,
+              isStream: true,
+              ipAddress: clientIp,
+              userAgent,
+              detail: JSON.stringify({ reason: 'Stream buffer failed', provider: provider.name }),
+              requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+              upstreamUrl: url,
+            });
             continue;
           }
 
