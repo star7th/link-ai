@@ -417,21 +417,24 @@ async function handleRequest(
   if (isStream) {
     const failedProviderIds: string[] = [];
 
-    for (const provider of providers) {
-      if (!circuitBreaker.isAvailable(provider.id)) {
+    for (let i = 0; i < providers.length; i++) {
+      const provider = providers[i];
+      const isLastResort = i === providers.length - 1;
+
+      if (!isLastResort && !circuitBreaker.isAvailable(provider.id)) {
         failedProviderIds.push(provider.id);
         continue;
       }
 
       const providerConfig = await prisma.provider.findUnique({ where: { id: provider.id } });
-      if (providerConfig?.totalRpmLimit) {
+      if (!isLastResort && providerConfig?.totalRpmLimit) {
         const rpmCheck = rateLimiter.check('provider', provider.id, 'rpm', providerConfig.totalRpmLimit);
         if (!rpmCheck.allowed) {
           failedProviderIds.push(provider.id);
           continue;
         }
       }
-      if (providerConfig?.totalTpmLimit) {
+      if (!isLastResort && providerConfig?.totalTpmLimit) {
         const tpmCheck = rateLimiter.check('provider', provider.id, 'tpm', providerConfig.totalTpmLimit, 0);
         if (!tpmCheck.allowed) {
           failedProviderIds.push(provider.id);
@@ -439,13 +442,15 @@ async function handleRequest(
         }
       }
 
-      const providerQuotaCheck = await quotaEngine.checkQuota('provider', provider.id, {
-        tokenLimit: providerConfig?.totalTpmLimit ?? undefined,
-        period: 'monthly'
-      });
-      if (!providerQuotaCheck.allowed) {
-        failedProviderIds.push(provider.id);
-        continue;
+      if (!isLastResort) {
+        const providerQuotaCheck = await quotaEngine.checkQuota('provider', provider.id, {
+          tokenLimit: providerConfig?.totalTpmLimit ?? undefined,
+          period: 'monthly'
+        });
+        if (!providerQuotaCheck.allowed) {
+          failedProviderIds.push(provider.id);
+          continue;
+        }
       }
 
       const url = resolveProxyUrl(provider.apiBaseUrl, path);
@@ -576,7 +581,7 @@ async function handleRequest(
         }
 
         let upstreamRespBody: string | undefined;
-        try { upstreamRespBody = (await upstream.text()).slice(0, 50000); } catch {}
+        try { upstreamRespBody = await upstream.text(); } catch {}
         failedProviderIds.push(provider.id);
         circuitBreaker.recordFailure(provider.id, provider.name);
         auditLogger.log({
@@ -594,8 +599,15 @@ async function handleRequest(
           detail: JSON.stringify({ reason: 'Provider returned non-ok status', status: upstream.status }),
           requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
           upstreamUrl: url,
-          upstreamResponse: upstreamRespBody,
+          upstreamResponse: upstreamRespBody?.slice(0, 50000),
         });
+        if (isLastResort) {
+          const respHeaders = new Headers();
+          upstream.headers.forEach((v: string, k: string) => {
+            if (!['content-encoding', 'transfer-encoding'].includes(k)) respHeaders.set(k, v);
+          });
+          return new Response(upstreamRespBody || '', { status: upstream.status, headers: respHeaders });
+        }
       } catch (error: any) {
         const errMsg = error instanceof Error ? error.message : String(error);
         const causeMsg = error?.cause?.message || '';
@@ -619,6 +631,9 @@ async function handleRequest(
         });
         failedProviderIds.push(provider.id);
         circuitBreaker.recordFailure(provider.id, provider.name);
+        if (isLastResort) {
+          break;
+        }
       }
     }
 
@@ -651,21 +666,24 @@ async function handleRequest(
   // --- Non-stream handling ---
   const failedProviderIds: string[] = [];
 
-  for (const provider of providers) {
-    if (!circuitBreaker.isAvailable(provider.id)) {
+  for (let i = 0; i < providers.length; i++) {
+    const provider = providers[i];
+    const isLastResort = i === providers.length - 1;
+
+    if (!isLastResort && !circuitBreaker.isAvailable(provider.id)) {
       failedProviderIds.push(provider.id);
       continue;
     }
 
     const providerConfig = await prisma.provider.findUnique({ where: { id: provider.id } });
-    if (providerConfig?.totalRpmLimit) {
+    if (!isLastResort && providerConfig?.totalRpmLimit) {
       const rpmCheck = rateLimiter.check('provider', provider.id, 'rpm', providerConfig.totalRpmLimit);
       if (!rpmCheck.allowed) {
         failedProviderIds.push(provider.id);
         continue;
       }
     }
-    if (providerConfig?.totalTpmLimit) {
+    if (!isLastResort && providerConfig?.totalTpmLimit) {
       const tpmCheck = rateLimiter.check('provider', provider.id, 'tpm', providerConfig.totalTpmLimit, 0);
       if (!tpmCheck.allowed) {
         failedProviderIds.push(provider.id);
@@ -781,7 +799,7 @@ async function handleRequest(
       }
 
       let upstreamRespBody: string | undefined;
-      try { upstreamRespBody = (await upstream.text()).slice(0, 50000); } catch {}
+      try { upstreamRespBody = await upstream.text(); } catch {}
       failedProviderIds.push(provider.id);
       circuitBreaker.recordFailure(provider.id, provider.name);
       auditLogger.log({
@@ -798,8 +816,15 @@ async function handleRequest(
         detail: JSON.stringify({ reason: 'Provider returned non-ok status', status: upstream.status }),
         requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
         upstreamUrl: url,
-        upstreamResponse: upstreamRespBody,
+        upstreamResponse: upstreamRespBody?.slice(0, 50000),
       });
+      if (isLastResort) {
+        const respHeaders = new Headers();
+        upstream.headers.forEach((v: string, k: string) => {
+          if (!['content-encoding', 'transfer-encoding'].includes(k)) respHeaders.set(k, v);
+        });
+        return new Response(upstreamRespBody || '', { status: upstream.status, headers: respHeaders });
+      }
     } catch (error: any) {
       const errMsg = error instanceof Error ? error.message : String(error);
       const causeMsg = error?.cause?.message || '';
@@ -822,6 +847,9 @@ async function handleRequest(
       });
       failedProviderIds.push(provider.id);
       circuitBreaker.recordFailure(provider.id, provider.name);
+      if (isLastResort) {
+        break;
+      }
     }
   }
 

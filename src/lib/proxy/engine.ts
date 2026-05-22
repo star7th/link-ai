@@ -134,9 +134,7 @@ export class ProxyEngine {
           return { response, providerId: provider.id, failover: false, streamed: false };
         }
         circuitBreaker.recordFailure(provider.id, provider.name);
-        const err: any = new Error(`Provider ${provider.name} returned ${response.status}`);
-        err.upstreamUrl = resolveProxyUrl(provider.apiBaseUrl, path);
-        throw err;
+        return { response, providerId: provider.id, failover: false, streamed: false };
       } catch (error) {
         circuitBreaker.recordFailure(provider.id, provider.name);
         if (error instanceof Error && !(error as any).upstreamUrl) {
@@ -154,10 +152,13 @@ export class ProxyEngine {
     let failover = false;
     let streamed = false;
 
-    for (const provider of providers) {
+    for (let i = 0; i < providers.length; i++) {
+      const provider = providers[i];
+      const isLastResort = i === providers.length - 1;
+
       await this.setupProviderConfig(provider.id);
 
-      if (!circuitBreaker.isAvailable(provider.id)) {
+      if (!isLastResort && !circuitBreaker.isAvailable(provider.id)) {
         const err: any = new Error(`Provider ${provider.name} circuit is open`);
         err.isSystemError = true;
         lastError = err;
@@ -167,7 +168,7 @@ export class ProxyEngine {
 
       const providerConfig = await this.getProviderWithConfig(provider.id);
 
-      if (providerConfig?.totalRpmLimit) {
+      if (!isLastResort && providerConfig?.totalRpmLimit) {
         const rpmCheck = rateLimiter.check('provider', provider.id, 'rpm', providerConfig.totalRpmLimit);
         if (!rpmCheck.allowed) {
           const err: any = new Error(`Provider ${provider.name} RPM limit exceeded`);
@@ -178,7 +179,7 @@ export class ProxyEngine {
         }
       }
 
-      if (providerConfig?.totalTpmLimit) {
+      if (!isLastResort && providerConfig?.totalTpmLimit) {
         const tpmCheck = rateLimiter.check('provider', provider.id, 'tpm', providerConfig.totalTpmLimit, 0);
         if (!tpmCheck.allowed) {
           const err: any = new Error(`Provider ${provider.name} TPM limit exceeded`);
@@ -189,25 +190,25 @@ export class ProxyEngine {
         }
       }
 
-      const quotaCheck = await quotaEngine.checkQuota('provider', provider.id, {
-        tokenLimit: providerConfig?.totalTpmLimit,
-        period: 'monthly'
-      });
+      if (!isLastResort) {
+        const quotaCheck = await quotaEngine.checkQuota('provider', provider.id, {
+          tokenLimit: providerConfig?.totalTpmLimit,
+          period: 'monthly'
+        });
 
-      if (!quotaCheck.allowed) {
-        const err: any = new Error(`Provider ${provider.name} quota exceeded`);
-        err.isSystemError = true;
-        lastError = err;
-        failover = true;
-        continue;
+        if (!quotaCheck.allowed) {
+          const err: any = new Error(`Provider ${provider.name} quota exceeded`);
+          err.isSystemError = true;
+          lastError = err;
+          failover = true;
+          continue;
+        }
       }
 
       try {
         const response = await this.forwardToProvider(provider, path, method, headers, body);
         const upstreamUrl = resolveProxyUrl(provider.apiBaseUrl, path);
 
-        // Whitelist: only 2xx is considered success.
-        // Anything else (3xx, 4xx, 5xx) triggers failover.
         if (response.status >= 200 && response.status < 300) {
           circuitBreaker.recordSuccess(provider.id, provider.name);
           if (providerConfig?.totalRpmLimit) {
@@ -222,6 +223,10 @@ export class ProxyEngine {
         err.upstreamResponse = response.body ? JSON.stringify(response.body).slice(0, 50000) : undefined;
         lastError = err;
         failover = true;
+
+        if (isLastResort) {
+          return { response, providerId: provider.id, failover, streamed };
+        }
       } catch (error: any) {
         circuitBreaker.recordFailure(provider.id, provider.name);
         if (!error.upstreamUrl) {
@@ -233,6 +238,10 @@ export class ProxyEngine {
         }
         lastError = error instanceof Error ? error : new Error(`Provider ${provider.name} request failed`);
         failover = true;
+
+        if (isLastResort) {
+          throw lastError;
+        }
       }
     }
 

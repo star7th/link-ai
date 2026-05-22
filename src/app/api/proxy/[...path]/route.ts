@@ -574,7 +574,30 @@ async function handleRequest(
           }
 
           circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
-          throw new Error(`Single provider returned ${upstream.status}`);
+          let upstreamRespBody: string | undefined;
+          try { upstreamRespBody = await upstream.text(); } catch {}
+          const respHeaders = new Headers();
+          upstream.headers.forEach((v: string, k: string) => {
+            if (!['content-encoding', 'transfer-encoding'].includes(k)) respHeaders.set(k, v);
+          });
+          auditLogger.log({
+            tokenId: token.id,
+            userId: token.userId,
+            providerId: tp.provider.id,
+            logType: 'request',
+            action: path,
+            requestMethod: method,
+            responseStatus: upstream.status,
+            responseTime: Date.now() - startTime,
+            isStream: true,
+            ipAddress: clientIp,
+            userAgent,
+            detail: JSON.stringify({ reason: 'Single provider returned non-ok status', status: upstream.status }),
+            requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+            upstreamUrl: url,
+            upstreamResponse: upstreamRespBody?.slice(0, 50000),
+          });
+          return new Response(upstreamRespBody || '', { status: upstream.status, headers: respHeaders });
         } catch (error) {
           circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
           const errMsg = error instanceof Error ? error.message : String(error);
@@ -598,16 +621,18 @@ async function handleRequest(
         }
       }
 
-      for (const tp of providerList) {
-        if (!circuitBreaker.isAvailable(tp.provider.id)) {
+      for (let i = 0; i < providerList.length; i++) {
+        const tp = providerList[i];
+        const isLastResort = i === providerList.length - 1;
+
+        if (!isLastResort && !circuitBreaker.isAvailable(tp.provider.id)) {
           failedProviderIds.push(tp.provider.id);
           failedProviderReasons[tp.provider.id] = 'circuit_open';
           continue;
         }
 
-        // 提供商级限流校验
         const providerConfig = await prisma.provider.findUnique({ where: { id: tp.provider.id } });
-        if (providerConfig?.totalRpmLimit) {
+        if (!isLastResort && providerConfig?.totalRpmLimit) {
           const rpmCheck = rateLimiter.check('provider', tp.provider.id, 'rpm', providerConfig.totalRpmLimit);
           if (!rpmCheck.allowed) {
             failedProviderIds.push(tp.provider.id);
@@ -615,7 +640,7 @@ async function handleRequest(
             continue;
           }
         }
-        if (providerConfig?.totalTpmLimit) {
+        if (!isLastResort && providerConfig?.totalTpmLimit) {
           const tpmCheck = rateLimiter.check('provider', tp.provider.id, 'tpm', providerConfig.totalTpmLimit, 0);
           if (!tpmCheck.allowed) {
             failedProviderIds.push(tp.provider.id);
@@ -624,15 +649,16 @@ async function handleRequest(
           }
         }
 
-        // 提供商级配额校验
-        const providerQuotaCheck = await quotaEngine.checkQuota('provider', tp.provider.id, {
-          tokenLimit: providerConfig?.totalTpmLimit ?? undefined,
-          period: 'monthly'
-        });
-        if (!providerQuotaCheck.allowed) {
-          failedProviderIds.push(tp.provider.id);
-          failedProviderReasons[tp.provider.id] = 'quota_exceeded';
-          continue;
+        if (!isLastResort) {
+          const providerQuotaCheck = await quotaEngine.checkQuota('provider', tp.provider.id, {
+            tokenLimit: providerConfig?.totalTpmLimit ?? undefined,
+            period: 'monthly'
+          });
+          if (!providerQuotaCheck.allowed) {
+            failedProviderIds.push(tp.provider.id);
+            failedProviderReasons[tp.provider.id] = 'quota_exceeded';
+            continue;
+          }
         }
 
         const apiKey = decrypt(tp.provider.apiKeyEncrypted);
@@ -769,7 +795,7 @@ async function handleRequest(
           }
 
           let upstreamRespBody: string | undefined;
-          try { upstreamRespBody = (await upstream.text()).slice(0, 50000); } catch {}
+          try { upstreamRespBody = await upstream.text(); } catch {}
           failedProviderIds.push(tp.provider.id);
           failedProviderReasons[tp.provider.id] = `http_${upstream.status}`;
           circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
@@ -788,8 +814,15 @@ async function handleRequest(
             detail: JSON.stringify({ reason: 'Provider returned non-ok status', status: upstream.status, provider: tp.provider.name }),
             requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
             upstreamUrl: url,
-            upstreamResponse: upstreamRespBody,
+            upstreamResponse: upstreamRespBody?.slice(0, 50000),
           });
+          if (isLastResort) {
+            const respHeaders = new Headers();
+            upstream.headers.forEach((v: string, k: string) => {
+              if (!['content-encoding', 'transfer-encoding'].includes(k)) respHeaders.set(k, v);
+            });
+            return new Response(upstreamRespBody || '', { status: upstream.status, headers: respHeaders });
+          }
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);
           const causeMsg = (error as any)?.cause?.message || (error as any)?.cause?.code || '';
@@ -813,6 +846,9 @@ async function handleRequest(
             upstreamUrl: url,
             upstreamResponse: causeMsg ? `${errMsg}: ${causeMsg}` : errMsg,
           });
+          if (isLastResort) {
+            break;
+          }
         }
       }
 

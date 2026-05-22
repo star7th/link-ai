@@ -18,20 +18,24 @@
     │                     │
     └──────────┬──────────┘
                ▼
-    ┌─────────────────────┐
-    │  供应商列表 (按 priority 排序)  │
-    │  Provider A → B → C          │
-    └──────────┬────────────────────┘
-               │
-               ▼ 对每个供应商依次尝试
-    ┌─────────────────────────────────────┐
-    │  熔断器检查 → RPM/TPM 限流 → 配额检查 │
-    │  → 转发请求 → 判定成功/失败            │
-    └─────────────────────────────────────┘
-               │
-       成功 → 返回响应
-       失败 → 尝试下一个供应商
-       全部失败 → 返回 502
+     ┌─────────────────────┐
+     │  供应商列表 (按 priority 排序)  │
+     │  Provider A → B → C          │
+     └──────────┬────────────────────┘
+                │
+                ▼ 对每个供应商依次尝试
+     ┌─────────────────────────────────────┐
+     │  熔断器检查 → RPM/TPM 限流 → 配额检查 │
+     │  → 转发请求 → 判定成功/失败            │
+     └─────────────────────────────────────┘
+                │
+        成功 → 返回响应
+        失败 → 尝试下一个供应商
+        ┌─────────────────────────────────────┐
+        │ 最后一个供应商（兜底）：             │
+        │ 跳过熔断器/RPM/TPM/配额检查，        │
+        │ 无论响应状态如何都直接返回给用户      │
+        └─────────────────────────────────────┘
 ```
 
 ## 二、核心概念
@@ -48,7 +52,7 @@
 
 ### 2.2 令牌 (Token)
 
-令牌通过 `tokenProviders` 关联多个供应商，每个关联有一个 `priority` 字段。容灾时按 `priority` 升序遍历。若令牌未绑定任何供应商，则 fallback 到所有 `status: active` 的供应商。
+令牌通过 `tokenProviders` 关联多个供应商，每个关联有一个 `priority` 字段。容灾时按 `priority` 升序遍历。**最后一个供应商作为兜底**，跳过熔断器、RPM/TPM 限流和配额检查，直接转发请求并将上游响应（无论 HTTP 状态码）返回给用户。若令牌未绑定任何供应商，则 fallback 到所有 `status: active` 的供应商（同样以最后一个为兜底）。当只有一个供应商时，该供应商即为兜底，直接跳过熔断器等检查。
 
 ### 2.3 熔断器 (Circuit Breaker)
 
@@ -101,6 +105,21 @@
 
 源码位置：`src/lib/failover/anti-flap.ts`
 
+### 2.5 兜底机制 (Last Resort)
+
+当有多个供应商时，**最后一个供应商（priority 最高/排在最后的）自动成为兜底供应商**。
+
+**行为**：
+- 跳过熔断器检查（即使熔断器 open 也照常发送请求）
+- 跳过 RPM/TPM 限流检查
+- 跳过配额检查
+- 无论上游返回什么 HTTP 状态码（包括 4xx、5xx），都将上游的实际响应返回给用户
+- 仍然会记录成功/失败用于可观测性
+
+**设计意图**：即使所有常规检查都失败，也尽量给用户一个真实的上游响应，而不是统一的 502 错误。当只有一个供应商时，该供应商天然就是兜底。
+
+**注意**：如果兜底供应商请求本身抛出异常（如网络超时），由于无法获得上游响应，仍会返回 502。
+
 ## 三、请求链路详细流程
 
 ### 3.1 非流式请求
@@ -114,23 +133,26 @@ forwardWithFailover()
   │
   ├── getProvidersForToken()  // 按优先级获取供应商列表
   │
-  ├── 如果只有 1 个供应商 → 直接请求（跳过熔断器检查，但仍记录成功/失败）
+  ├── 如果只有 1 个供应商 → 直接请求（跳过熔断器检查，作为兜底）
   │
   └── 如果有多个供应商 → 循环遍历：
         │
+        ├── 最后一个供应商为兜底（isLastResort）
+        │
         ├── setupProviderConfig()          // 加载熔断器配置
-        ├── circuitBreaker.isAvailable()   // 检查熔断器是否开启
+        ├── [非兜底] circuitBreaker.isAvailable()   // 检查熔断器是否开启
         │   └── 如果 open → 跳过此供应商
-        ├── rateLimiter.check() (RPM)      // 检查每分钟请求数限制
-        ├── rateLimiter.check() (TPM)      // 检查每分钟 token 数限制
-        ├── quotaEngine.checkQuota()       // 检查月度配额
+        ├── [非兜底] rateLimiter.check() (RPM)      // 检查每分钟请求数限制
+        ├── [非兜底] rateLimiter.check() (TPM)      // 检查每分钟 token 数限制
+        ├── [非兜底] quotaEngine.checkQuota()       // 检查月度配额
         │
         ├── forwardToProvider()            // 实际转发请求
         │   ├── applyModelRedirect()       // 模型名称重定向
         │   └── adapter.forward()          // 按协议类型适配转发
         │
         ├── 成功 (2xx) → recordSuccess() → 返回响应
-        └── 失败 → recordFailure() → 继续下一个供应商
+        ├── [非兜底] 失败 → recordFailure() → 继续下一个供应商
+        └── [兜底] 失败 → recordFailure() → 将上游响应直接返回给用户
 ```
 
 ### 3.2 流式请求 (Stream)
@@ -144,6 +166,7 @@ forwardWithFailover()
 3. 使用 `bufferUpstreamStream()` 缓冲初始数据以检测早期失败
 4. 使用 `createStreamProxy()` 代理 SSE 流式响应
 5. 成功返回流，失败 continue 到下一个供应商
+6. **最后一个供应商作为兜底**：跳过熔断器/RPM/TPM/配额检查，将上游实际响应返回给用户
 
 ### 3.3 Anthropic 协议请求
 
@@ -196,11 +219,11 @@ forwardWithFailover()
 
 | 字段 | 说明 |
 |------|------|
-| `providerId` | 最终处理请求的供应商 ID |
+| `providerId` | 处理该请求的供应商 ID（失败时为导致失败的供应商） |
 | `failover` | 是否发生了容灾切换 |
 | `upstreamUrl` | 上游请求的完整 URL |
 | `upstreamResponse` | 上游返回的响应内容（仅失败时记录） |
-| `detail` | JSON 格式的错误详情 |
+| `detail` | JSON 格式的错误详情（关键排查字段） |
 
 ### 6.2 错误来源区分
 
@@ -209,7 +232,30 @@ forwardWithFailover()
 
 ### 6.3 容灾审计流程
 
-单个请求可能在审计日志中产生多条记录（每个尝试过的供应商一条），最终还有一条汇总记录。流式请求会在"所有供应商失败"时生成一条汇总日志，包含 `failedProviderIds` 列表。
+当请求需要容灾（多个供应商依次尝试）且最终失败时，审计日志会产生以下记录：
+
+**每供应商失败记录**（`responseStatus: 502`）：每个尝试过但失败的供应商各一条，`detail` 中包含失败原因：
+- `circuit_open` — 被熔断器跳过
+- `rpm_limit` / `tpm_limit` / `quota_exceeded` — 被限流/配额跳过
+- `http_xxx` — 上游返回非 2xx（附带 `upstreamResponse`）
+- `exception: xxx` — 请求异常（超时、网络错误等，附带具体错误信息和 cause）
+- `stream_buffer_failed` — 流式缓冲阶段上游断开
+
+**汇总记录**（`responseStatus: 502`）：一条总结记录，`detail` 包含：
+```json
+{
+  "reason": "All providers failed",
+  "providerCount": 3,
+  "failedProviderIds": ["id_A", "id_B", "id_C"],
+  "failedProviderReasons": {
+    "id_A": "exception: Upstream stream request failed: timeout",
+    "id_B": "exception: Upstream stream request failed: timeout",
+    "id_C": "exception: Upstream stream request failed: timeout"
+  }
+}
+```
+
+通过 `failedProviderReasons` 可以直接看到每个供应商的具体失败原因，无需查数据库。
 
 ## 七、关键文件索引
 
@@ -240,10 +286,11 @@ forwardWithFailover()
 ### Q: 所有供应商都失败了
 
 **排查步骤**：
-1. 查看审计日志的 `detail` 字段，检查 `failedProviderIds` 列表
-2. 如果 `upstreamResponse` 为空，说明是系统错误（熔断/限流/配额），不是上游问题
-3. 检查 `FailoverConfig` 表所有供应商的 `circuitState`
-4. 检查供应商的 RPM/TPM 限制是否设置过低
+1. 在管理后台"审计日志"页面找到 502 记录，点击"查看"
+2. 在"详细信息"中查看 `failedProviderReasons`，确认每个供应商的具体失败原因
+3. 如果所有供应商都显示 `exception: ... timeout`，可能是前面的供应商超时消耗了太多时间，导致后面的供应商也无法在超时窗口内完成请求（流式默认超时 10 秒/供应商）
+4. 如果显示 `circuit_open`，说明熔断器被打开，参考上一条 FAQ
+5. 如果 `upstreamResponse` 为空，说明是系统错误（熔断/限流/配额），不是上游问题
 
 ### Q: 连接测试正常但请求 502
 
