@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma, proxyEngine, hashToken, rateLimiter, quotaEngine, auditLogger, circuitBreaker, alertEngine } from '@/lib/engines';
 import { applyModelRedirect } from '@/lib/proxy/engine';
 import { desensitizeEngine } from '@/lib/desensitize/engine';
-import { createStreamProxy, extractStreamUsage, extractReadableText, bufferUpstreamStream } from '@/lib/proxy/stream';
+import { createStreamProxy, extractStreamUsage, extractReadableText, extractResponsesStreamUsage, extractResponsesReadableText, extractResponsesNonStreamText, bufferUpstreamStream } from '@/lib/proxy/stream';
 import { setupProviderConfigs } from '@/lib/proxy/engine';
 import { resolveProxyUrl } from '@/lib/proxy/adapter/base';
 import { decrypt } from '@/lib/crypto';
@@ -346,8 +346,10 @@ async function handleRequest(
     }
   }
 
-  if (body && method === 'POST' && path.includes('/completions')) {
-    const messages = body.messages || [];
+  const isCompletionsApi = path.includes('/completions');
+  const isResponsesApi = path === '/v1/responses' || path.startsWith('/v1/responses/');
+
+  if (body && method === 'POST' && (isCompletionsApi || isResponsesApi)) {
     let blocked = false;
     const allHits: Array<{ ruleName: string; action: string; matchCount: number }> = [];
 
@@ -366,31 +368,101 @@ async function handleRequest(
       return text;
     };
 
-    const processedMessages = [];
-    for (const m of messages) {
-      if (blocked) {
-        processedMessages.push(m);
-        continue;
+    // Chat Completions API: process body.messages
+    if (isCompletionsApi) {
+      const messages = body.messages || [];
+      const processedMessages = [];
+      for (const m of messages) {
+        if (blocked) {
+          processedMessages.push(m);
+          continue;
+        }
+        if (typeof m.content === 'string') {
+          const processed = await processText(m.content);
+          processedMessages.push({ ...m, content: processed });
+        } else if (Array.isArray(m.content)) {
+          const processedParts = [];
+          for (const part of m.content) {
+            if (part.type === 'text' && typeof part.text === 'string') {
+              const processed = await processText(part.text);
+              processedParts.push({ ...part, text: processed });
+            } else {
+              processedParts.push(part);
+            }
+          }
+          processedMessages.push({ ...m, content: processedParts });
+        } else {
+          processedMessages.push(m);
+        }
       }
-      if (typeof m.content === 'string') {
-        const processed = await processText(m.content);
-        processedMessages.push({ ...m, content: processed });
-      } else if (Array.isArray(m.content)) {
-        const processedParts = [];
-        for (const part of m.content) {
-          if (part.type === 'text' && typeof part.text === 'string') {
-            const processed = await processText(part.text);
-            processedParts.push({ ...part, text: processed });
+      body.messages = processedMessages;
+    }
+
+    // Responses API: process body.instructions and body.input
+    if (isResponsesApi) {
+      // Process instructions field
+      if (typeof body.instructions === 'string') {
+        body.instructions = await processText(body.instructions);
+      }
+
+      // Process input field
+      if (typeof body.input === 'string') {
+        body.input = await processText(body.input);
+      } else if (Array.isArray(body.input) && !blocked) {
+        const processedInput = [];
+        for (const item of body.input) {
+          if (blocked) {
+            processedInput.push(item);
+            continue;
+          }
+          if (typeof item === 'string') {
+            processedInput.push(await processText(item));
+          } else if (item && typeof item === 'object' && item.type === 'message') {
+            const processedItem = { ...item };
+            if (typeof item.content === 'string') {
+              processedItem.content = await processText(item.content);
+            } else if (Array.isArray(item.content)) {
+              const processedParts = [];
+              for (const part of item.content) {
+                if (typeof part === 'string') {
+                  processedParts.push(await processText(part));
+                } else if (part.type === 'text' && typeof part.text === 'string') {
+                  processedParts.push({ ...part, text: await processText(part.text) });
+                } else {
+                  processedParts.push(part);
+                }
+              }
+              processedItem.content = processedParts;
+            }
+            processedInput.push(processedItem);
+          } else if (item && typeof item === 'object' && item.type === 'function_call' && typeof item.arguments === 'string') {
+            const processedItem = { ...item };
+            processedItem.arguments = await processText(item.arguments);
+            processedInput.push(processedItem);
+          } else if (item && typeof item === 'object' && item.type === 'function_call_output' && typeof item.output === 'string') {
+            const processedItem = { ...item };
+            processedItem.output = await processText(item.output);
+            processedInput.push(processedItem);
           } else {
-            processedParts.push(part);
+            processedInput.push(item);
           }
         }
-        processedMessages.push({ ...m, content: processedParts });
-      } else {
-        processedMessages.push(m);
+        body.input = processedInput;
+      }
+
+      // Process tools[].description for function tools
+      if (Array.isArray(body.tools)) {
+        const processedTools = [];
+        for (const tool of body.tools) {
+          if (tool.type === 'function' && typeof tool.description === 'string') {
+            processedTools.push({ ...tool, description: await processText(tool.description) });
+          } else {
+            processedTools.push(tool);
+          }
+        }
+        body.tools = processedTools;
       }
     }
-    body.messages = processedMessages;
 
     if (blocked) {
       auditLogger.log({
@@ -516,7 +588,7 @@ async function handleRequest(
               {
                 onDone(fullText) {
                   const completeText = buffered.fullText + fullText;
-                  const usage = extractStreamUsage(completeText);
+                  const usage = isResponsesApi ? extractResponsesStreamUsage(completeText) : extractStreamUsage(completeText);
 
                   if (usage.totalTokens > 0) {
                     const period = quotaEngine.store.getCurrentPeriod(token.quotaPeriod);
@@ -525,6 +597,7 @@ async function handleRequest(
 
                   isAuditLogFullBodyEnabled().then((logFullBody) => {
                     const hasHits = desensitizeHitResults.length > 0;
+                    const readableText = isResponsesApi ? extractResponsesReadableText(completeText) : extractReadableText(completeText);
                     auditLogger.log({
                       tokenId: token.id,
                       userId: token.userId,
@@ -542,7 +615,7 @@ async function handleRequest(
                       ipAddress: clientIp,
                       userAgent,
                       requestBody: (logFullBody || hasHits) && body ? JSON.stringify(body).slice(0, 50000) : undefined,
-                      responseBody: logFullBody ? extractReadableText(completeText).slice(0, 50000) || completeText.slice(0, 50000) : undefined,
+                      responseBody: logFullBody ? readableText.slice(0, 50000) || completeText.slice(0, 50000) : undefined,
                       desensitizeHits: hasHits ? JSON.stringify(desensitizeHitResults) : undefined,
                     });
                   });
@@ -737,7 +810,7 @@ async function handleRequest(
                 onDone(fullText) {
                   // Prepend any text already accumulated during buffering
                   const completeText = buffered.fullText + fullText;
-                  const usage = extractStreamUsage(completeText);
+                  const usage = isResponsesApi ? extractResponsesStreamUsage(completeText) : extractStreamUsage(completeText);
 
                   if (usage.totalTokens > 0) {
                     const period = quotaEngine.store.getCurrentPeriod(token.quotaPeriod);
@@ -746,6 +819,7 @@ async function handleRequest(
 
                   isAuditLogFullBodyEnabled().then((logFullBody) => {
                     const hasHits = desensitizeHitResults.length > 0;
+                    const readableText = isResponsesApi ? extractResponsesReadableText(completeText) : extractReadableText(completeText);
                     auditLogger.log({
                       tokenId: token.id,
                       userId: token.userId,
@@ -763,7 +837,7 @@ async function handleRequest(
                       ipAddress: clientIp,
                       userAgent,
                       requestBody: (logFullBody || hasHits) && body ? JSON.stringify(body).slice(0, 50000) : undefined,
-                      responseBody: logFullBody ? extractReadableText(completeText).slice(0, 50000) || completeText.slice(0, 50000) : undefined,
+                      responseBody: logFullBody ? readableText.slice(0, 50000) || completeText.slice(0, 50000) : undefined,
                       desensitizeHits: hasHits ? JSON.stringify(desensitizeHitResults) : undefined,
                     });
                   });
@@ -897,7 +971,10 @@ async function handleRequest(
 
     rateLimiter.record('token', token.id, 'rpm');
 
-    const totalTokens = result.response.body?.usage?.total_tokens || 0;
+    const respUsage = result.response.body?.usage;
+    const totalTokens = respUsage?.total_tokens || 0;
+    const promptTokens = (isResponsesApi ? respUsage?.input_tokens : respUsage?.prompt_tokens) || 0;
+    const completionTokens = (isResponsesApi ? respUsage?.output_tokens : respUsage?.completion_tokens) || 0;
     if (totalTokens > 0) {
       const period = quotaEngine.store.getCurrentPeriod(token.quotaPeriod);
       quotaEngine.recordUsage('token', token.id, totalTokens, period);
@@ -946,14 +1023,14 @@ async function handleRequest(
       requestMethod: method,
       responseStatus: result.response.status,
       responseTime,
-      promptTokens: result.response.body?.usage?.prompt_tokens,
-      completionTokens: result.response.body?.usage?.completion_tokens,
-      totalTokens: result.response.body?.usage?.total_tokens,
+      promptTokens: promptTokens,
+      completionTokens: completionTokens,
+      totalTokens: totalTokens,
       failover: result.failover,
       ipAddress: clientIp,
       userAgent,
       requestBody: (logFullBody || hasDesensitizeHits || result.response.status !== 200) && body ? JSON.stringify(body).slice(0, 50000) : undefined,
-      responseBody: (logFullBody || result.response.status !== 200) && result.response.body ? JSON.stringify(result.response.body).slice(0, 50000) : undefined,
+      responseBody: (logFullBody || result.response.status !== 200) && result.response.body ? (isResponsesApi ? extractResponsesNonStreamText(result.response.body) || JSON.stringify(result.response.body).slice(0, 50000) : JSON.stringify(result.response.body).slice(0, 50000)) : undefined,
       desensitizeHits: hasDesensitizeHits ? JSON.stringify(desensitizeHitResults) : undefined,
     });
 
