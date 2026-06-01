@@ -380,3 +380,130 @@ export function extractReadableText(data: string): string {
   } catch {}
   return parts.join('');
 }
+
+/**
+ * Extract token usage from Responses API SSE stream.
+ *
+ * The `response.completed` event carries the final usage object:
+ *   event: response.completed
+ *   data: {"type":"response.completed","response":{"usage":{"input_tokens":...,"output_tokens":...,"total_tokens":...}, ...}}
+ */
+export function extractResponsesStreamUsage(data: string): {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+} {
+  try {
+    const lines = data.split('\n').filter((l) => l.startsWith('data: '));
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const jsonStr = lines[i].replace('data: ', '').trim();
+      if (jsonStr === '[DONE]') continue;
+      try {
+        const parsed = JSON.parse(jsonStr);
+        // response.completed event contains response.usage
+        const usage = parsed.response?.usage || parsed.usage;
+        if (usage) {
+          return {
+            promptTokens: usage.input_tokens || usage.prompt_tokens || 0,
+            completionTokens: usage.output_tokens || usage.completion_tokens || 0,
+            totalTokens: usage.total_tokens || 0,
+          };
+        }
+      } catch {
+        // skip
+      }
+    }
+  } catch {}
+  return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+}
+
+/**
+ * Extract readable text from a Responses API non-stream response.
+ *
+ * Response structure:
+ *   { status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "..." }] }] }
+ *
+ * Also handles `output_text` items directly in the output array:
+ *   { output: [{ type: "output_text", text: "..." }] }
+ */
+export function extractResponsesNonStreamText(body: any): string {
+  if (!body || !Array.isArray(body.output)) return '';
+  const parts: string[] = [];
+  for (const item of body.output) {
+    if (item?.type === 'output_text' && typeof item.text === 'string') {
+      parts.push(item.text);
+    } else if (item?.type === 'message' && Array.isArray(item.content)) {
+      for (const part of item.content) {
+        if (part?.type === 'output_text' && typeof part.text === 'string') {
+          parts.push(part.text);
+        }
+      }
+    }
+  }
+  return parts.join('');
+}
+
+/**
+ * Extract readable text from Responses API SSE stream.
+ *
+ * Text content arrives via `response.content_part.delta` events:
+ *   event: response.content_part.delta
+ *   data: {"type":"content_part.delta","delta":{"type":"text_delta","text":"..."}}
+ *
+ * Also handles `response.output_text.delta` (older / alternate naming).
+ */
+export function extractResponsesReadableText(data: string): string {
+  const parts: string[] = [];
+  try {
+    const lines = data.split('\n').filter((l) => l.startsWith('data: '));
+    for (const line of lines) {
+      const jsonStr = line.replace('data: ', '').trim();
+      if (jsonStr === '[DONE]') continue;
+      try {
+        const parsed = JSON.parse(jsonStr);
+
+        // response.content_part.delta
+        if (parsed.delta?.type === 'text_delta' && typeof parsed.delta.text === 'string') {
+          parts.push(parsed.delta.text);
+          continue;
+        }
+
+        // response.output_text.delta (alternate naming)
+        if (parsed.type === 'response.output_text.delta' && typeof parsed.delta === 'string') {
+          parts.push(parsed.delta);
+          continue;
+        }
+
+        // response.output_text.done — full text fallback when delta was not streamed
+        if (parsed.type === 'response.output_text.done' && typeof parsed.text === 'string') {
+          parts.push(parsed.text);
+          continue;
+        }
+
+        // response.refusal.delta — safety refusal content for audit
+        if (parsed.type === 'response.refusal.delta' && typeof parsed.delta === 'string') {
+          parts.push(parsed.delta);
+          continue;
+        }
+
+        // response.reasoning.delta — reasoning/thinking content
+        if (parsed.type === 'response.reasoning.delta') {
+          const text = typeof parsed.delta?.text === 'string' ? parsed.delta.text : typeof parsed.delta === 'string' ? parsed.delta : null;
+          if (text) {
+            parts.push(text);
+            continue;
+          }
+        }
+
+        // response.reasoning_text.delta — alternate reasoning event
+        if (parsed.type === 'response.reasoning_text.delta' && typeof parsed.delta === 'string') {
+          parts.push(parsed.delta);
+          continue;
+        }
+      } catch {
+        // skip non-JSON lines
+      }
+    }
+  } catch {}
+  return parts.join('');
+}
