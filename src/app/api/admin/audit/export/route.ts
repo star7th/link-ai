@@ -21,14 +21,26 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const format = searchParams.get('format') || 'json';
   const userId = searchParams.get('userId');
+  const username = searchParams.get('username');
   const tokenId = searchParams.get('tokenId');
+  const tokenName = searchParams.get('tokenName');
+  const providerId = searchParams.get('providerId');
+  const model = searchParams.get('model');
   const logType = searchParams.get('logType');
   const startDate = searchParams.get('startDate');
   const endDate = searchParams.get('endDate');
 
   const where: any = {};
   if (userId) where.userId = userId;
+  if (username) {
+    where.user = { username: { contains: username } };
+  }
   if (tokenId) where.tokenId = tokenId;
+  if (tokenName) {
+    where.token = { name: { contains: tokenName } };
+  }
+  if (providerId) where.providerId = providerId;
+  if (model) where.model = { contains: model };
   if (logType) where.logType = logType;
   if (startDate || endDate) {
     where.createdAt = {};
@@ -50,7 +62,7 @@ export async function GET(request: NextRequest) {
   if (format === 'csv') {
     const headers = [
       'ID', 'Timestamp', 'User ID', 'Username', 'Token ID', 'Token Name',
-      'Provider ID', 'Provider Name', 'Log Type', 'Action', 'Request Method',
+      'Provider ID', 'Provider Name', 'Model', 'Log Type', 'Action', 'Request Method',
       'Response Status', 'Response Time', 'Prompt Tokens', 'Completion Tokens',
       'Total Tokens', 'Is Stream', 'Failover', 'IP Address', 'User Agent'
     ];
@@ -64,6 +76,7 @@ export async function GET(request: NextRequest) {
       log.token?.name,
       log.providerId,
       log.providerName,
+      log.model,
       log.logType,
       log.action,
       log.requestMethod,

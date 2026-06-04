@@ -6,6 +6,7 @@ export interface AuditLog {
   tokenId?: string;
   providerId?: string;
   providerName?: string;
+  model?: string;
   logType: AuditLogType;
   action: string;
   requestMethod?: string;
@@ -34,6 +35,7 @@ export interface AuditLogEntry {
   tokenId?: string;
   providerId?: string;
   providerName?: string;
+  model?: string;
   logType: AuditLogType;
   action: string;
   requestMethod?: string;
@@ -59,8 +61,10 @@ export interface DesensitizeHit {
 
 export interface AuditLogFilter {
   userId?: string;
+  username?: string;
   tokenId?: string;
   providerId?: string;
+  model?: string;
   logType?: AuditLogType;
   startDate?: string;
   endDate?: string;

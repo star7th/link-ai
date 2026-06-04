@@ -6,6 +6,7 @@ type AuditLogEntry = {
   tokenId?: string;
   providerId?: string;
   providerName?: string;
+  model?: string;
   logType: string;
   action: string;
   requestMethod?: string;
@@ -102,6 +103,7 @@ class AuditLogger {
           tokenId: e.tokenId,
           providerId: e.providerId,
           providerName: e.providerName,
+          model: e.model,
           logType: e.logType,
           action: e.action,
           requestMethod: e.requestMethod,

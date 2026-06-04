@@ -282,6 +282,7 @@ model AuditLog {
   tokenId            String?
   providerId         String?
   providerName       String?
+  model              String?
   logType            String
   action             String
   requestMethod      String?
@@ -308,11 +309,12 @@ model AuditLog {
 
   user               User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   token              Token?    @relation(fields: [tokenId], references: [id], onDelete: SetNull)
-  provider           Provider? @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  provider           Provider? @relation(fields: [providerId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
   @@index([tokenId, createdAt])
   @@index([logType, createdAt])
+  @@index([model, createdAt])
   @@index([createdAt])
 }
 

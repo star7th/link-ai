@@ -23,14 +23,26 @@ export async function GET(request: NextRequest) {
   const page = parseInt(searchParams.get('page') || '1');
   const limit = parseInt(searchParams.get('limit') || '50');
   const userId = searchParams.get('userId');
+  const username = searchParams.get('username');
   const tokenId = searchParams.get('tokenId');
+  const tokenName = searchParams.get('tokenName');
+  const providerId = searchParams.get('providerId');
+  const model = searchParams.get('model');
   const logType = searchParams.get('logType');
   const startDate = searchParams.get('startDate');
   const endDate = searchParams.get('endDate');
 
   const where: any = {};
   if (userId) where.userId = userId;
+  if (username) {
+    where.user = { username: { contains: username } };
+  }
   if (tokenId) where.tokenId = tokenId;
+  if (tokenName) {
+    where.token = { name: { contains: tokenName } };
+  }
+  if (providerId) where.providerId = providerId;
+  if (model) where.model = { contains: model };
   if (logType) where.logType = logType;
   if (startDate || endDate) {
     where.createdAt = {};

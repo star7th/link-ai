@@ -357,6 +357,7 @@ async function handleRequest(
         detail: JSON.stringify({ reason: 'Blocked by desensitization rules' }),
         requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
         desensitizeHits: JSON.stringify(allHits),
+        model: body?.model || undefined,
       });
       return NextResponse.json(
         { type: 'error', error: { type: 'permission_error', message: 'Request blocked by content policy' } },
@@ -388,6 +389,7 @@ async function handleRequest(
       responseTime: Date.now() - startTime,
       detail: JSON.stringify({ reason: 'No anthropic providers available' }),
       requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+      model: body?.model || undefined,
     });
     return NextResponse.json(
       { type: 'error', error: { type: 'api_error', message: 'No Anthropic providers available' } },
@@ -505,6 +507,7 @@ async function handleRequest(
               detail: JSON.stringify({ reason: 'Stream buffer failed', provider: provider.name }),
               requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
               upstreamUrl: url,
+              model: body?.model || undefined,
             });
             continue;
           }
@@ -551,6 +554,7 @@ async function handleRequest(
                     requestBody: (logFullBody || hasHits) && body ? JSON.stringify(body).slice(0, 50000) : undefined,
                     responseBody: logFullBody ? completeText.slice(0, 50000) : undefined,
                     desensitizeHits: hasHits ? JSON.stringify(desensitizeHitResults) : undefined,
+                    model: body?.model || undefined,
                   });
                 });
               },
@@ -572,6 +576,7 @@ async function handleRequest(
                   requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
                   responseBody: error instanceof Error ? error.message : String(error),
                   upstreamUrl: url,
+                  model: body?.model || undefined,
                 });
               }
             }
@@ -600,6 +605,7 @@ async function handleRequest(
           requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
           upstreamUrl: url,
           upstreamResponse: upstreamRespBody?.slice(0, 50000),
+          model: body?.model || undefined,
         });
         if (isLastResort) {
           const respHeaders = new Headers();
@@ -628,6 +634,7 @@ async function handleRequest(
           requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
           upstreamUrl: url,
           upstreamResponse: errMsg,
+          model: body?.model || undefined,
         });
         failedProviderIds.push(provider.id);
         circuitBreaker.recordFailure(provider.id, provider.name);
@@ -656,6 +663,7 @@ async function handleRequest(
         failedProviderIds,
       }),
       requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+      model: body?.model || undefined,
     });
     return NextResponse.json(
       { type: 'error', error: { type: 'api_error', message: 'All providers failed', detail: lastError } },
@@ -790,6 +798,7 @@ async function handleRequest(
           requestBody: (logFullBody || hasDesensitizeHits || upstream.status !== 200) && body ? JSON.stringify(body).slice(0, 50000) : undefined,
           responseBody: (logFullBody || upstream.status !== 200) ? respBody.slice(0, 50000) : undefined,
           desensitizeHits: hasDesensitizeHits ? JSON.stringify(desensitizeHitResults) : undefined,
+          model: body?.model || undefined,
         });
 
         return new Response(respBody, {
@@ -817,6 +826,7 @@ async function handleRequest(
         requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
         upstreamUrl: url,
         upstreamResponse: upstreamRespBody?.slice(0, 50000),
+        model: body?.model || undefined,
       });
       if (isLastResort) {
         const respHeaders = new Headers();
@@ -844,6 +854,7 @@ async function handleRequest(
         requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
         upstreamUrl: url,
         upstreamResponse: errMsg,
+        model: body?.model || undefined,
       });
       failedProviderIds.push(provider.id);
       circuitBreaker.recordFailure(provider.id, provider.name);
@@ -871,6 +882,7 @@ async function handleRequest(
       failedProviderIds,
     }),
     requestBody: body ? JSON.stringify(body).slice(0, 50000) : undefined,
+    model: body?.model || undefined,
   });
 
   return NextResponse.json(

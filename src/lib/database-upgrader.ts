@@ -644,6 +644,21 @@ const DB_VERSIONS = [
         await prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" ADD COLUMN "upstreamResponse" TEXT;`);
       }
     }
+  },
+  {
+    version: 19,
+    name: '审计日志增加模型字段及索引',
+    check: async () => {
+      return await hasColumn('AuditLog', 'model');
+    },
+    upgrade: async () => {
+      if (!await hasColumn('AuditLog', 'model')) {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" ADD COLUMN "model" TEXT;`);
+      }
+      try {
+        await prisma.$executeRawUnsafe(`CREATE INDEX "AuditLog_model_createdAt_idx" ON "AuditLog"("model", "createdAt");`);
+      } catch (_) {}
+    }
   }
 ];
 

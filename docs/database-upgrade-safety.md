@@ -73,9 +73,10 @@
 - **版本15**: 提供商增加模型重定向字段
 - **版本16**: 提供商增加超时配置字段（timeoutMs、streamTimeoutMs）
 - **版本17**: 故障转移配置增加熔断状态字段（circuitState、circuitStateSince）
+- **版本18**: 审计日志增加上游URL和响应字段（upstreamUrl、upstreamResponse）
+- **版本19**: 审计日志增加模型字段（model）及索引，用于记录请求使用的模型名称
 
-### 最新版本：17
-包含熔断状态字段的所有必要表结构。
+### 最新版本：19
 
 ## 升级流程
 

@@ -19,6 +19,7 @@ interface AuditLog {
   isStream: boolean;
   failover: boolean;
   ipAddress: string;
+  model?: string;
   createdAt: string;
   requestBody?: string;
   responseBody?: string;
@@ -92,6 +93,7 @@ function LogDetailModal({
             <div><span className="text-muted-foreground">用户：</span>{log.user?.username || "-"}</div>
             <div><span className="text-muted-foreground">令牌：</span>{log.token ? `${log.token.keyPrefix}...${log.token.name}` : "-"}</div>
             <div><span className="text-muted-foreground">提供商：</span>{log.provider?.name || "-"}</div>
+            <div><span className="text-muted-foreground">模型：</span>{log.model || "-"}</div>
             <div><span className="text-muted-foreground">方法：</span>{log.requestMethod || "-"}</div>
             <div><span className="text-muted-foreground">路径：</span><span className="font-mono text-xs">{log.action}</span></div>
             <div><span className="text-muted-foreground">状态码：</span>{log.responseStatus}</div>
@@ -187,13 +189,27 @@ export default function AdminAuditLogsPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [page, setPage] = useState(1);
   const [logType, setLogType] = useState("");
-  const [userId, setUserId] = useState("");
+  const [username, setUsername] = useState("");
+  const [tokenName, setTokenName] = useState("");
+  const [providerId, setProviderId] = useState("");
+  const [model, setModel] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [loading, setLoading] = useState(true);
   const [fullBodyEnabled, setFullBodyEnabled] = useState(false);
   const [detailLog, setDetailLog] = useState<AuditLog | null>(null);
+  const [providers, setProviders] = useState<{ id: string; name: string }[]>([]);
   const limit = 10;
+
+  useEffect(() => {
+    fetch("/api/admin/providers")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setProviders(data);
+        else if (data.providers && Array.isArray(data.providers)) setProviders(data.providers);
+      })
+      .catch(() => {});
+  }, []);
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
@@ -203,7 +219,10 @@ export default function AdminAuditLogsPage() {
         limit: String(limit),
       });
       if (logType) params.set("logType", logType);
-      if (userId) params.set("userId", userId);
+      if (username) params.set("username", username);
+      if (tokenName) params.set("tokenName", tokenName);
+      if (providerId) params.set("providerId", providerId);
+      if (model) params.set("model", model);
       if (startDate) params.set("startDate", startDate);
       if (endDate) params.set("endDate", endDate);
 
@@ -220,7 +239,7 @@ export default function AdminAuditLogsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, logType, userId, startDate, endDate]);
+  }, [page, logType, username, tokenName, providerId, model, startDate, endDate]);
 
   useEffect(() => {
     fetchLogs();
@@ -229,6 +248,17 @@ export default function AdminAuditLogsPage() {
   const handleFilter = () => {
     setPage(1);
     fetchLogs();
+  };
+
+  const handleReset = () => {
+    setLogType("");
+    setUsername("");
+    setTokenName("");
+    setProviderId("");
+    setModel("");
+    setStartDate("");
+    setEndDate("");
+    setPage(1);
   };
 
   const handleToggleFullBody = async () => {
@@ -290,6 +320,8 @@ export default function AdminAuditLogsPage() {
     return `${log.totalTokens.toLocaleString()}`;
   };
 
+  const colCount = 12;
+
   return (
     <div className="container mx-auto py-8 space-y-6">
       <div>
@@ -299,50 +331,84 @@ export default function AdminAuditLogsPage() {
 
       <Card>
         <CardHeader>
-          <div className="flex flex-col sm:flex-row gap-4 items-end">
-            <div>
-              <label className="block text-sm font-medium mb-1">日志类型</label>
-              <select
-                value={logType}
-                onChange={(e) => setLogType(e.target.value)}
-                className="h-10 rounded-md border border-primary/20 dark:border-primary/30 bg-light-input dark:bg-dark-input px-3 py-2 text-sm text-light-text-primary dark:text-dark-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-              >
-                <option value="">全部类型</option>
-                <option value="request">请求</option>
-                <option value="operation">操作</option>
-                <option value="system">系统</option>
-                <option value="desensitize_hit">脱敏命中</option>
-              </select>
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-wrap gap-4 items-end">
+              <div>
+                <label className="block text-sm font-medium mb-1">日志类型</label>
+                <select
+                  value={logType}
+                  onChange={(e) => setLogType(e.target.value)}
+                  className="h-10 rounded-md border border-primary/20 dark:border-primary/30 bg-light-input dark:bg-dark-input px-3 py-2 text-sm text-light-text-primary dark:text-dark-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                >
+                  <option value="">全部类型</option>
+                  <option value="request">请求</option>
+                  <option value="operation">操作</option>
+                  <option value="system">系统</option>
+                  <option value="desensitize_hit">脱敏命中</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">用户名</label>
+                <Input
+                  placeholder="输入用户名"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="max-w-[160px]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">令牌名称</label>
+                <Input
+                  placeholder="输入令牌名称"
+                  value={tokenName}
+                  onChange={(e) => setTokenName(e.target.value)}
+                  className="max-w-[160px]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">提供商</label>
+                <select
+                  value={providerId}
+                  onChange={(e) => setProviderId(e.target.value)}
+                  className="h-10 rounded-md border border-primary/20 dark:border-primary/30 bg-light-input dark:bg-dark-input px-3 py-2 text-sm text-light-text-primary dark:text-dark-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 max-w-[180px]"
+                >
+                  <option value="">全部提供商</option>
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">模型</label>
+                <Input
+                  placeholder="输入模型名称"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  className="max-w-[160px]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">开始日期</label>
+                <Input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="max-w-[160px]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">结束日期</label>
+                <Input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="max-w-[160px]"
+                />
+              </div>
+              <Button onClick={handleFilter}>筛选</Button>
+              <Button variant="outline" onClick={handleReset}>重置</Button>
             </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">用户ID</label>
-              <Input
-                placeholder="输入用户ID"
-                value={userId}
-                onChange={(e) => setUserId(e.target.value)}
-                className="max-w-[160px]"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">开始日期</label>
-              <Input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="max-w-[180px]"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">结束日期</label>
-              <Input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                className="max-w-[180px]"
-              />
-            </div>
-            <Button onClick={handleFilter}>筛选</Button>
-            <div className="flex items-center gap-2 ml-2">
+            <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground whitespace-nowrap">记录完整请求/响应</span>
               <button
                 type="button"
@@ -372,6 +438,7 @@ export default function AdminAuditLogsPage() {
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground">用户</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell">令牌</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell">提供商</th>
+                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell">模型</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground">操作/路径</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground">状态码</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell">Token用量</th>
@@ -383,13 +450,13 @@ export default function AdminAuditLogsPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={11} className="text-center py-8 text-muted-foreground">
+                    <td colSpan={colCount} className="text-center py-8 text-muted-foreground">
                       加载中...
                     </td>
                   </tr>
                 ) : logs.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="text-center py-8 text-muted-foreground">
+                    <td colSpan={colCount} className="text-center py-8 text-muted-foreground">
                       暂无日志数据
                     </td>
                   </tr>
@@ -418,6 +485,13 @@ export default function AdminAuditLogsPage() {
                         )}
                       </td>
                       <td className="py-3 px-4 hidden lg:table-cell">{log.provider?.name || "-"}</td>
+                      <td className="py-3 px-4 hidden md:table-cell">
+                        {log.model ? (
+                          <span className="font-mono text-xs" title={log.model}>
+                            {log.model.length > 20 ? `${log.model.slice(0, 20)}...` : log.model}
+                          </span>
+                        ) : "-"}
+                      </td>
                       <td className="py-3 px-4">
                         <span className="font-mono text-xs" title={log.action}>
                           {log.action.length > 40 ? `${log.action.slice(0, 40)}...` : log.action}
