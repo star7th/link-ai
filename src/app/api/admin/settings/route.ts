@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { buildAuthOptions } from '@/app/api/auth/[...nextauth]/route';
 import { getSystemConfig, setSystemConfig } from '@/lib/system-config';
+import { prisma } from '@/lib/prisma';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -63,4 +64,27 @@ export async function PUT(request: NextRequest) {
   }
 
   return NextResponse.json({ success: true });
+}
+
+export async function POST(request: NextRequest) {
+  const authError = await requireAdmin(request);
+  if (authError) return authError;
+
+  const body = await request.json();
+  const days = Number(body.days);
+
+  if (!days || days <= 0) {
+    return NextResponse.json({ error: '无效的天数' }, { status: 400 });
+  }
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+
+  const result = await prisma.auditLog.deleteMany({
+    where: {
+      createdAt: { lt: cutoff },
+    },
+  });
+
+  return NextResponse.json({ deleted: result.count });
 }

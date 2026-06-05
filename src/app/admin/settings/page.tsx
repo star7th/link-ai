@@ -22,6 +22,9 @@ export default function AdminSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [cleanupDays, setCleanupDays] = useState(90);
+  const [cleaning, setCleaning] = useState(false);
+  const [cleanupMessage, setCleanupMessage] = useState("");
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -63,6 +66,31 @@ export default function AdminSettingsPage() {
       setMessage("保存失败");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleCleanup = async () => {
+    if (!window.confirm(`确定要清理 ${cleanupDays} 天前的审计日志吗？此操作不可恢复。`)) return;
+    setCleaning(true);
+    setCleanupMessage("");
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ days: cleanupDays }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCleanupMessage(`清理完成，共删除 ${data.deleted} 条记录`);
+      } else {
+        const data = await res.json();
+        setCleanupMessage(data.error || "清理失败");
+      }
+    } catch {
+      setCleanupMessage("清理失败");
+    } finally {
+      setCleaning(false);
+      setTimeout(() => setCleanupMessage(""), 5000);
     }
   };
 
@@ -148,6 +176,37 @@ export default function AdminSettingsPage() {
               >
                 {message}
               </span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <h3 className="text-lg font-semibold">数据清理</h3>
+        </CardHeader>
+        <CardContent>
+          <div className="max-w-md space-y-4">
+            <p className="text-sm text-muted-foreground">手动清理指定天数之前的审计日志数据，释放存储空间。</p>
+            <div className="flex items-end gap-3">
+              <div className="flex-1">
+                <label className="block text-sm font-medium mb-1">清理多少天前的数据</label>
+                <Input
+                  type="number"
+                  value={cleanupDays}
+                  onChange={(e) => setCleanupDays(Number(e.target.value))}
+                  min={1}
+                  placeholder="90"
+                />
+              </div>
+              <Button variant="outline" onClick={handleCleanup} disabled={cleaning}>
+                {cleaning ? "清理中..." : "立即清理"}
+              </Button>
+            </div>
+            {cleanupMessage && (
+              <p className={`text-sm ${cleanupMessage.startsWith("清理完成") ? "text-success dark:text-success" : "text-error"}`}>
+                {cleanupMessage}
+              </p>
             )}
           </div>
         </CardContent>
