@@ -64,4 +64,30 @@ describe('applyModelRedirect', () => {
     expect(body.model).toBe('gpt-4');
     expect(result.model).toBe('gpt-4-turbo');
   });
+
+  it('matches wildcard * when no exact match', () => {
+    const body = { model: 'some-random-model', messages: [] };
+    const rules = JSON.stringify([
+      { from: 'gpt-4', to: 'gpt-4-turbo' },
+      { from: '*', to: 'deepseek-chat' },
+    ]);
+    expect(applyModelRedirect(body, rules)).toEqual({ model: 'deepseek-chat', messages: [] });
+  });
+
+  it('prefers exact match over wildcard', () => {
+    const body = { model: 'gpt-4', messages: [] };
+    const rules = JSON.stringify([
+      { from: 'gpt-4', to: 'gpt-4-turbo' },
+      { from: '*', to: 'deepseek-chat' },
+    ]);
+    expect(applyModelRedirect(body, rules)).toEqual({ model: 'gpt-4-turbo', messages: [] });
+  });
+
+  it('wildcard * redirects all unmatched models', () => {
+    const rules = JSON.stringify([{ from: '*', to: 'gpt-4o' }]);
+    const body1 = { model: 'model-a', messages: [] };
+    const body2 = { model: 'model-b', messages: [] };
+    expect(applyModelRedirect(body1, rules)).toEqual({ model: 'gpt-4o', messages: [] });
+    expect(applyModelRedirect(body2, rules)).toEqual({ model: 'gpt-4o', messages: [] });
+  });
 });

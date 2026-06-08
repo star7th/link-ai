@@ -17,9 +17,13 @@ export function applyModelRedirect(body: any, modelRedirectStr: string | null): 
   try {
     const rules: Array<{ from: string; to: string }> = JSON.parse(modelRedirectStr);
     if (!Array.isArray(rules)) return body;
-    const match = rules.find(r => r.from === body.model);
-    if (match) {
-      return { ...body, model: match.to };
+    const exactMatch = rules.find(r => r.from === body.model);
+    if (exactMatch) {
+      return { ...body, model: exactMatch.to };
+    }
+    const wildcardMatch = rules.find(r => r.from === '*');
+    if (wildcardMatch) {
+      return { ...body, model: wildcardMatch.to };
     }
   } catch {}
   return body;

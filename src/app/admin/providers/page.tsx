@@ -258,7 +258,7 @@ function ModelRedirectEditor({
       </Button>
       {rules.length > 0 && (
         <p className="text-xs text-muted-foreground">
-          当客户端请求左侧模型时，将自动替换为右侧模型名发送给上游
+          左侧填写模型名精确匹配，或填写 <code className="px-1 py-0.5 bg-primary/10 rounded text-xs">*</code> 作为通配符兜底（未命中精确规则时，所有模型都重定向到右侧指定模型）
         </p>
       )}
     </div>
