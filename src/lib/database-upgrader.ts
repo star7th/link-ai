@@ -526,10 +526,10 @@ const DB_VERSIONS = [
             "updatedAt" DATETIME NOT NULL,
             CONSTRAINT "QuotaSnapshot_refId_fkey" FOREIGN KEY ("refId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
           );
-          CREATE UNIQUE INDEX "QuotaSnapshot_type_refId_period_key" ON "QuotaSnapshot"("type", "refId", "period");
-          CREATE INDEX "QuotaSnapshot_type_period_idx" ON "QuotaSnapshot"("type", "period");
-          CREATE INDEX "QuotaSnapshot_refId_idx" ON "QuotaSnapshot"("refId");
         `);
+        await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "QuotaSnapshot_type_refId_period_key" ON "QuotaSnapshot"("type", "refId", "period");`);
+        await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "QuotaSnapshot_type_period_idx" ON "QuotaSnapshot"("type", "period");`);
+        await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "QuotaSnapshot_refId_idx" ON "QuotaSnapshot"("refId");`);
       }
     }
   },
@@ -656,8 +656,22 @@ const DB_VERSIONS = [
         await prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" ADD COLUMN "model" TEXT;`);
       }
       try {
-        await prisma.$executeRawUnsafe(`CREATE INDEX "AuditLog_model_createdAt_idx" ON "AuditLog"("model", "createdAt");`);
+        await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "AuditLog_model_createdAt_idx" ON "AuditLog"("model", "createdAt");`);
       } catch (_) {}
+    }
+  },
+  {
+    version: 20,
+    name: '修复配额快照表缺失的索引',
+    check: async () => {
+      return await hasIndex('QuotaSnapshot', 'QuotaSnapshot_type_refId_period_key');
+    },
+    upgrade: async () => {
+      if (await hasTable('QuotaSnapshot')) {
+        await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "QuotaSnapshot_type_refId_period_key" ON "QuotaSnapshot"("type", "refId", "period");`);
+        await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "QuotaSnapshot_type_period_idx" ON "QuotaSnapshot"("type", "period");`);
+        await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "QuotaSnapshot_refId_idx" ON "QuotaSnapshot"("refId");`);
+      }
     }
   }
 ];
@@ -727,6 +741,20 @@ async function hasColumn(tableName: string, columnName: string): Promise<boolean
     return result.some(col => col.name === columnName);
   } catch (error) {
     console.error(`检查列 ${tableName}.${columnName} 失败`, error);
+    return false;
+  }
+}
+
+// 检查索引是否存在
+async function hasIndex(tableName: string, indexName: string): Promise<boolean> {
+  try {
+    const result = await prisma.$queryRawUnsafe<any[]>(
+      `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? AND name=?`,
+      tableName, indexName
+    );
+    return result.length > 0;
+  } catch (error) {
+    console.error(`检查索引 ${tableName}.${indexName} 失败`, error);
     return false;
   }
 }
