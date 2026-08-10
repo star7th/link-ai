@@ -53,6 +53,13 @@ export function extractToken(request: NextRequest): string | null {
   return null;
 }
 
+/**
+ * Extract client IP from request headers.
+ *
+ * Requires a reverse proxy (e.g. Nginx) that sets X-Forwarded-For or X-Real-IP.
+ * When clients connect directly (e.g. Docker without a proxy), Next.js App Router
+ * does not expose socket-level remoteAddress, so IP will be 'unknown'.
+ */
 export function getClientIp(request: NextRequest): string {
   const forwarded = request.headers.get('x-forwarded-for');
   const ip = forwarded?.split(',')[0]?.trim() || request.headers.get('x-real-ip') || 'unknown';

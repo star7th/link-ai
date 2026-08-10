@@ -5,23 +5,29 @@ import { buildAuthOptions } from '@/app/api/auth/[...nextauth]/route';
 import { redirect } from 'next/navigation';
 
 export default async function SetupPage() {
+  let hasAdmin = false;
   try {
-    const hasAdmin = await hasAdminUser();
-
-    if (hasAdmin) {
-      console.log("系统已初始化（有管理员），重定向到登录页");
-      return redirect('/auth/login');
-    }
-
-    const session = await getServerSession(await buildAuthOptions());
-
-    if (session) {
-      console.log("用户已登录，重定向到首页");
-      return redirect('/');
-    }
+    hasAdmin = await hasAdminUser();
   } catch (error) {
     console.error("检查管理员状态出错:", error);
     return redirect('/auth/login');
+  }
+
+  if (hasAdmin) {
+    console.log("系统已初始化（有管理员），重定向到登录页");
+    return redirect('/auth/login');
+  }
+
+  let session: any = null;
+  try {
+    session = await getServerSession(await buildAuthOptions());
+  } catch (error) {
+    console.error("获取会话出错:", error);
+  }
+
+  if (session) {
+    console.log("用户已登录，重定向到首页");
+    return redirect('/');
   }
 
   console.log("显示系统初始化表单");
