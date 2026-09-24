@@ -22,11 +22,11 @@ RUN mkdir -p /app/prisma/template && \
     DB_FILE=$(find /app -name "*.db" -type f | head -n 1) && \
     if [ -n "$DB_FILE" ]; then \
       echo "找到数据库文件: $DB_FILE" && \
-      cp "$DB_FILE" /app/prisma/template/link-ai.db && \
-      echo "数据库模板已保存到: /app/prisma/template/link-ai.db"; \
+      cp "$DB_FILE" /app/prisma/template/app.db && \
+      echo "数据库模板已保存到: /app/prisma/template/app.db"; \
     else \
       echo "警告: 未找到数据库文件!" && \
-      touch /app/prisma/template/coolmonitor.db && \
+      touch /app/prisma/template/app.db && \
       echo "已创建空的数据库模板文件"; \
     fi
 
