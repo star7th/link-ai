@@ -123,4 +123,22 @@ describe('quotaEngine', () => {
       expect(usage.requests).toBe(2);
     });
   });
+
+  describe('persistToDB', () => {
+    it('skips provider entries and persists user entries', async () => {
+      const { prisma } = await import('@/lib/prisma');
+      quotaEngine.store.set('provider', 'aggregated', dailyPeriod, 12345, 0);
+      quotaEngine.store.set('user', 'u1', dailyPeriod, 100, 2);
+
+      await quotaEngine.persistToDB();
+
+      const upsert = vi.mocked(prisma.quotaSnapshot.upsert);
+      expect(upsert).toHaveBeenCalledTimes(1);
+      expect(upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { type_refId_period: { type: 'user', refId: 'u1', period: dailyPeriod } },
+        })
+      );
+    });
+  });
 });
