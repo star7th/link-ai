@@ -67,6 +67,10 @@ export const quotaEngine = {
 
     for (const entry of entries) {
       const [_, type, refId, period] = entry.key.split(':');
+      // provider 条目（如 recoverFromDB 聚合的 provider:aggregated）的 refId 不是 User id，
+      // 写入 QuotaSnapshot（refId 外键指向 User 表）会触发 P2003，永远失败。
+      // 该类数据重启时会从 auditLog 重新聚合，无需持久化，这里直接跳过。
+      if (type === 'provider') continue;
       try {
         await prisma.quotaSnapshot.upsert({
           where: { type_refId_period: { type, refId, period } },
