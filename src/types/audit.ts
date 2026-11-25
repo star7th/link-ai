@@ -27,6 +27,7 @@ export interface AuditLog {
   previousHash?: string;
   desensitizeHits?: string;
   createdAt: Date;
+  model?: string | null;
 }
 
 export interface AuditLogEntry {

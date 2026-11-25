@@ -302,6 +302,8 @@ model AuditLog {
     upstreamUrl        String?
     upstreamResponse   String?
     contentHash        String?
+    /** 请求体中的模型名（原始字符串，未归一化）；历史记录为 null */
+    model              String?
     previousHash       String?
     desensitizeHits    String?
     createdAt          DateTime  @default(now())

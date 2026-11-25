@@ -644,6 +644,18 @@ const DB_VERSIONS = [
         await prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" ADD COLUMN "upstreamResponse" TEXT;`);
       }
     }
+  },
+  {
+    version: 19,
+    name: '审计日志增加模型字段',
+    check: async () => {
+      return await hasColumn('AuditLog', 'model');
+    },
+    upgrade: async () => {
+      if (!await hasColumn('AuditLog', 'model')) {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" ADD COLUMN "model" TEXT;`);
+      }
+    }
   }
 ];
 

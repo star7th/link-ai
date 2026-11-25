@@ -415,6 +415,10 @@ async function handleRequest(
     }
   }
 
+  // 记录到审计日志的模型名：取请求体原始值，不做归一化
+  const requestModel: string | undefined =
+    body && typeof body.model === 'string' && body.model ? body.model : undefined;
+
   const isStream = body?.stream === true || request.headers.get('accept') === 'text/event-stream';
 
   try {
@@ -538,6 +542,7 @@ async function handleRequest(
                       totalTokens: usage.totalTokens,
                       isStream: true,
                       failover: false,
+                      model: requestModel,
                       ipAddress: clientIp,
                       userAgent,
                       requestBody: (logFullBody || hasHits) && body ? JSON.stringify(body).slice(0, 50000) : undefined,
@@ -713,6 +718,7 @@ async function handleRequest(
                       totalTokens: usage.totalTokens,
                       isStream: true,
                       failover: failedProviderIds.length > 0,
+                      model: requestModel,
                       ipAddress: clientIp,
                       userAgent,
                       requestBody: (logFullBody || hasHits) && body ? JSON.stringify(body).slice(0, 50000) : undefined,
@@ -871,6 +877,7 @@ async function handleRequest(
       completionTokens: result.response.body?.usage?.completion_tokens,
       totalTokens: result.response.body?.usage?.total_tokens,
       failover: result.failover,
+      model: requestModel,
       ipAddress: clientIp,
       userAgent,
       requestBody: (logFullBody || hasDesensitizeHits || result.response.status !== 200) && body ? JSON.stringify(body).slice(0, 50000) : undefined,

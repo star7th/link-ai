@@ -26,6 +26,8 @@ type AuditLogEntry = {
   upstreamUrl?: string;
   upstreamResponse?: string;
   desensitizeHits?: string;
+  /** 请求模型名（取自请求体 body.model 的原始字符串） */
+  model?: string;
 };
 
 type PendingEntry = AuditLogEntry & { contentHash?: string; previousHash?: string };
@@ -122,6 +124,7 @@ class AuditLogger {
           upstreamUrl: e.upstreamUrl,
           upstreamResponse: e.upstreamResponse,
           desensitizeHits: e.desensitizeHits,
+          model: e.model,
           contentHash: e.contentHash,
           previousHash: e.previousHash,
           createdAt: new Date()
