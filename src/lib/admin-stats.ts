@@ -137,13 +137,24 @@ interface DimensionRow {
   latencySum: number;
 }
 
+/**
+ * 分组维度：
+ * - model：按模型名字符串分组，空串归「(未知)」
+ * - providerId：按 providerId 分组（再批量 join Provider 取显示名）；providerId 为空才归「(未知)」
+ *   注意不能按 providerName 分组：旧日志该字段可能为空，会被错误归入「(未知)」
+ */
+type DimColumn = 'model' | 'providerId';
+
+const dimKeyExpr = (column: DimColumn): Prisma.Sql =>
+  Prisma.sql`COALESCE(NULLIF(TRIM(${Prisma.raw(column)}), ''), ${UNKNOWN_LABEL})`;
+
 async function queryDimension(
-  column: 'model' | 'providerName',
+  column: DimColumn,
   a: number,
   b: number,
   limit: number
 ): Promise<DimensionRow[]> {
-  const key = Prisma.sql`COALESCE(NULLIF(TRIM(${Prisma.raw(column)}), ''), ${UNKNOWN_LABEL})`;
+  const key = dimKeyExpr(column);
   return prisma.$queryRaw<DimensionRow[]>`
     SELECT
       ${key} AS key,
@@ -251,29 +262,44 @@ export function percentile(values: number[], p: number): number | null {
 
 interface LatencySample {
   model: string;
-  providerName: string;
+  /** 分组键：providerId（空则 UNKNOWN_LABEL），与 queryDimension('providerId') 的 key 一致 */
+  providerKey: string;
   responseTime: number;
 }
 
 async function queryLatencySamples(a: number, b: number): Promise<LatencySample[]> {
   return prisma.$queryRaw<LatencySample[]>`
     SELECT
-      COALESCE(NULLIF(TRIM(model), ''), ${UNKNOWN_LABEL}) AS model,
-      COALESCE(NULLIF(TRIM(providerName), ''), ${UNKNOWN_LABEL}) AS providerName,
+      ${dimKeyExpr('model')} AS model,
+      ${dimKeyExpr('providerId')} AS providerKey,
       CAST(responseTime AS REAL) AS responseTime
     FROM AuditLog
     WHERE ${baseWhere(a, b)} AND responseTime IS NOT NULL
   `;
 }
 
+/** 当前窗口各维度的不重复个数（用于收起态摘要行「模型 N 个」） */
+async function queryDimCounts(a: number, b: number): Promise<{ models: number; providers: number }> {
+  const rows = await prisma.$queryRaw<{ models: number; providers: number }[]>`
+    SELECT
+      CAST(COUNT(DISTINCT NULLIF(TRIM(model), '')) AS REAL) AS models,
+      CAST(COUNT(DISTINCT CASE WHEN NULLIF(TRIM(providerId), '') IS NULL THEN NULL ELSE providerId END) AS REAL) AS providers
+    FROM AuditLog
+    WHERE ${baseWhere(a, b)}
+  `;
+  return { models: rows[0]?.models ?? 0, providers: rows[0]?.providers ?? 0 };
+}
+
 function ratio(num: number, den: number): number | null {
   return den > 0 ? num / den : null;
 }
 
+/** 核心指标卡：跟随当前时间窗口 */
 export interface StatsCards {
-  today: { requests: CardStat; tokens: CardStat; promptTokens: number; completionTokens: number };
-  '7d': { requests: CardStat; tokens: CardStat; promptTokens: number; completionTokens: number };
-  '30d': { requests: CardStat; tokens: CardStat; promptTokens: number; completionTokens: number };
+  requests: CardStat;
+  tokens: CardStat;
+  promptTokens: number;
+  completionTokens: number;
 }
 
 export interface StatsBreakdownItem {
@@ -307,9 +333,12 @@ export interface OverviewStats {
   generatedAt: number;
   detail: boolean;
   cards: StatsCards;
+  /** 当前窗口内的不重复模型数 / 提供商数 */
+  modelCount: number;
+  providerCount: number;
   summary: StatsSummary;
   prevSummary: StatsSummary;
-  /** 轻量模式（detail=false）下为 null */
+  /** 轻量模式（detail=false）下为 null；分布明细里各分组的 P95 同样仅 detail=true 有值 */
   trend: StatsTrendPoint[] | null;
   byModel: StatsBreakdownItem[];
   byProvider: StatsBreakdownItem[];
@@ -389,73 +418,72 @@ function buildTrend(w: Window, rows: TrendRow[]): StatsTrendPoint[] {
 
 /**
  * 聚合主入口。
- * @param detail false = 首屏轻量（三窗口数据卡 + 当前窗口的成功率/平均延迟/Top 列表 + 模型/提供商 Top3）
- *               true  = 完整（另含走势序列、P95、全量模型/提供商明细）
+ * @param detail false = 首屏轻量（当前窗口的 5 张核心卡 + Top 列表 + 模型/提供商 Top3）
+ *               true  = 完整（另含走势序列、各分组 P95、全量模型/提供商明细）
  */
 export async function getOverviewStats(range: StatsRange, detail: boolean, now = Date.now()): Promise<OverviewStats> {
   const w = buildWindow(range, now);
-  const w7 = buildWindow('7d', now);
-  const w30 = buildWindow('30d', now);
 
-  // 首屏数据卡：今天 / 7 天 / 30 天，各查当前 + 上一周期
-  const [sToday, pToday, s7, p7, s30, p30] = await Promise.all([
+  // 当前窗口 + 上一周期汇总（卡片环比 / 成功率 / 延迟）
+  const [curRaw, prevRaw, prevLatency] = await Promise.all([
     querySummary(w.start, w.end),
     querySummary(w.prevStart, w.prevEnd),
-    querySummary(w7.start, w7.end),
-    querySummary(w7.prevStart, w7.prevEnd),
-    querySummary(w30.start, w30.end),
-    querySummary(w30.prevStart, w30.prevEnd),
+    queryLatencySamples(w.prevStart, w.prevEnd),
   ]);
 
   const cards: StatsCards = {
-    today: {
-      requests: toCard(sToday.requests, pToday.requests),
-      tokens: toCard(sToday.tokens, pToday.tokens),
-      promptTokens: sToday.promptTokens,
-      completionTokens: sToday.completionTokens,
-    },
-    '7d': {
-      requests: toCard(s7.requests, p7.requests),
-      tokens: toCard(s7.tokens, p7.tokens),
-      promptTokens: s7.promptTokens,
-      completionTokens: s7.completionTokens,
-    },
-    '30d': {
-      requests: toCard(s30.requests, p30.requests),
-      tokens: toCard(s30.tokens, p30.tokens),
-      promptTokens: s30.promptTokens,
-      completionTokens: s30.completionTokens,
-    },
+    requests: toCard(curRaw.requests, prevRaw.requests),
+    tokens: toCard(curRaw.tokens, prevRaw.tokens),
+    promptTokens: curRaw.promptTokens,
+    completionTokens: curRaw.completionTokens,
   };
 
-  // 当前窗口：上一周期汇总 + Top 列表（一次 groupBy，批量取名）
-  const [prevRaw, byUser, byToken, dimLimit] = await Promise.all([
-    querySummary(w.prevStart, w.prevEnd),
+  const dimLimit = detail ? 1000 : 3;
+
+  // Top 列表（一次 groupBy，批量取名）+ 维度不重复数
+  const [byUser, byToken, dimCounts] = await Promise.all([
     queryNamed('userId', w.start, w.end, 10),
     queryNamed('tokenId', w.start, w.end, 10),
-    Promise.resolve(detail ? 1000 : 3),
+    queryDimCounts(w.start, w.end),
   ]);
-  const curRaw = range === 'today' ? sToday : range === '7d' ? s7 : s30;
 
+  // 按模型 / 按 providerId 分组；延迟样本只需单列，轻量模式也算 P95（卡片跟随窗口）
   const [modelRows, providerRows, samples] = await Promise.all([
     queryDimension('model', w.start, w.end, dimLimit),
-    queryDimension('providerName', w.start, w.end, dimLimit),
-    detail ? queryLatencySamples(w.start, w.end) : Promise.resolve([] as LatencySample[]),
+    queryDimension('providerId', w.start, w.end, dimLimit),
+    queryLatencySamples(w.start, w.end),
   ]);
+
+  // providerId -> 显示名（缺失的 provider 回退为 id 前 10 位）
+  const providerNames = new Map<string, string>();
+  const providerIds = providerRows.map((r) => r.key).filter((k) => k !== UNKNOWN_LABEL);
+  if (providerIds.length) {
+    const providers = await prisma.provider.findMany({
+      where: { id: { in: providerIds } },
+      select: { id: true, name: true },
+    });
+    for (const prov of providers) providerNames.set(prov.id, prov.name);
+  }
+  const providerRowsNamed = providerRows.map((r) =>
+    r.key === UNKNOWN_LABEL ? r : { ...r, key: providerNames.get(r.key) || r.key.slice(0, 10) }
+  );
 
   const trendRows = detail ? await queryTrend(w) : null;
 
   const modelSamples = new Map<string, number[]>();
   const providerSamples = new Map<string, number[]>();
-  let allSamples: number[] = [];
-  if (detail) {
-    allSamples = samples.map((s) => s.responseTime);
-    for (const s of samples) {
-      (modelSamples.get(s.model) ?? modelSamples.set(s.model, []).get(s.model)!).push(s.responseTime);
-      (providerSamples.get(s.providerName) ?? providerSamples.set(s.providerName, []).get(s.providerName)!).push(
-        s.responseTime
-      );
-    }
+  const allSamples: number[] = [];
+  for (const s of samples) {
+    allSamples.push(s.responseTime);
+    (modelSamples.get(s.model) ?? modelSamples.set(s.model, []).get(s.model)!).push(s.responseTime);
+    const pk = s.providerKey;
+    (providerSamples.get(pk) ?? providerSamples.set(pk, []).get(pk)!).push(s.responseTime);
+  }
+  // 延迟样本按 providerId 分桶，与 providerRows 对齐后再换成显示名
+  const providerSamplesNamed = new Map<string, number[]>();
+  for (const r of providerRows) {
+    const list = providerSamples.get(r.key);
+    if (list) providerSamplesNamed.set(r.key === UNKNOWN_LABEL ? r.key : providerNames.get(r.key) || r.key.slice(0, 10), list);
   }
 
   const dimTotal = curRaw.tokens;
@@ -466,11 +494,13 @@ export async function getOverviewStats(range: StatsRange, detail: boolean, now =
     generatedAt: now,
     detail,
     cards,
-    summary: finalizeSummary(curRaw, allSamples, detail),
-    prevSummary: finalizeSummary(prevRaw, [], false),
+    modelCount: dimCounts.models,
+    providerCount: dimCounts.providers,
+    summary: finalizeSummary(curRaw, allSamples, true),
+    prevSummary: finalizeSummary(prevRaw, prevLatency.map((s) => s.responseTime), true),
     trend: trendRows ? buildTrend(w, trendRows) : null,
     byModel: toBreakdown(modelRows, dimTotal, modelSamples, detail),
-    byProvider: toBreakdown(providerRows, dimTotal, providerSamples, detail),
+    byProvider: toBreakdown(providerRowsNamed, dimTotal, providerSamplesNamed, detail),
     topUsers: byUser,
     topTokens: byToken,
   };

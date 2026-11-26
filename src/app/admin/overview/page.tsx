@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -12,14 +12,14 @@ import type {
 } from '@/lib/admin-stats';
 
 // 图表库只在展开走势图后才加载，不进首屏 bundle
-const TokenTrendChart = dynamic(
-  () => import('@/components/admin-stats/overview-charts').then((m) => m.TokenTrendChart),
-  { ssr: false }
-);
-const RequestTrendChart = dynamic(
-  () => import('@/components/admin-stats/overview-charts').then((m) => m.RequestTrendChart),
-  { ssr: false }
-);
+let markChartLibReady: () => void = () => {};
+const loadCharts = () =>
+  import('@/components/admin-stats/overview-charts').then((m) => {
+    markChartLibReady();
+    return m;
+  });
+const TokenTrendChart = dynamic(() => loadCharts().then((m) => m.TokenTrendChart), { ssr: false });
+const RequestTrendChart = dynamic(() => loadCharts().then((m) => m.RequestTrendChart), { ssr: false });
 
 interface ProviderUsage {
   providerId: string;
@@ -63,6 +63,18 @@ function writeStored(key: string, value: string) {
   }
 }
 
+/** 区域加载遮罩：盖在已有内容上，比小 spinner 更明确 */
+function LoadingOverlay({ label = '加载中…' }: { label?: string }) {
+  return (
+    <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/75 dark:bg-black/50">
+      <span className="inline-flex items-center gap-2 text-sm text-light-text-secondary dark:text-dark-text-secondary">
+        <i className="fa-solid fa-spinner fa-spin" />
+        {label}
+      </span>
+    </div>
+  );
+}
+
 type SortKey = 'tokens' | 'requests' | 'share' | 'successRate' | 'avgLatency';
 
 function BreakdownTable({
@@ -71,12 +83,14 @@ function BreakdownTable({
   rows,
   totalTokens,
   full,
+  loading,
 }: {
   title: string;
   icon: string;
   rows: StatsBreakdownItem[];
   totalTokens: number;
   full: boolean;
+  loading: boolean;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>('tokens');
   const [desc, setDesc] = useState(true);
@@ -112,7 +126,7 @@ function BreakdownTable({
     </th>
   );
 
-  if (!rows.length) {
+  if (!rows.length && !loading) {
     return (
       <Card>
         <CardHeader>
@@ -131,7 +145,7 @@ function BreakdownTable({
   }
 
   return (
-    <Card>
+    <Card className="relative">
       <CardHeader>
         <CardTitle className="text-lg">
           <i className={`${icon} mr-2 text-purple-500`} />
@@ -180,6 +194,7 @@ function BreakdownTable({
         </table>
         {totalTokens === 0 && <p className="mt-2 text-xs text-muted-foreground">窗口内 Token 为 0，占比不计。</p>}
       </CardContent>
+      {loading && <LoadingOverlay />}
     </Card>
   );
 }
@@ -260,13 +275,23 @@ function ChangeText({ change, inverse = false }: { change: number | null; invers
   return <span className={cls}>{c.text}</span>;
 }
 
+interface CoreCard {
+  title: string;
+  icon: string;
+  color: string;
+  bg: string;
+  value: string;
+  sub: ReactNode;
+}
+
 export default function AdminOverviewPage() {
   const [range, setRange] = useState<StatsRange>('today');
   const [chartOpen, setChartOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [chartLibReady, setChartLibReady] = useState(false);
 
-  // 首屏轻量数据（按 range 缓存在内存里，切回已加载过的窗口不重复请求）
+  // 轻量数据（按 range 缓存在内存里，切回已加载过的窗口不重复请求）
   const [light, setLight] = useState<Partial<Record<StatsRange, OverviewStats>>>({});
   const [full, setFull] = useState<Partial<Record<StatsRange, OverviewStats>>>({});
   const [loadingLight, setLoadingLight] = useState(true);
@@ -281,6 +306,10 @@ export default function AdminOverviewPage() {
     setChartOpen(readStored(LS.chartOpen) === '1');
     setDetailOpen(readStored(LS.detailOpen) === '1');
     setHydrated(true);
+    markChartLibReady = () => setChartLibReady(true);
+    return () => {
+      markChartLibReady = () => {};
+    };
   }, []);
   useEffect(() => {
     if (hydrated) writeStored(LS.range, range);
@@ -344,31 +373,103 @@ export default function AdminOverviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range, needFull]);
 
-  const data: OverviewStats | null = full[range] ?? light[range] ?? null;
-  const isFull = Boolean(full[range]);
-  const hasFullData = Boolean(full[range]);
+  const fullData = full[range] ?? null;
+  const data: OverviewStats | null = fullData ?? light[range] ?? null;
   const initialLoading = loadingLight && !data;
+  // 已请求 detail 但当前窗口还没回来
+  const fullLoading = needFull && !fullData && !error;
+  const trend = fullData?.trend ?? null;
 
   const rangeLabel = RANGE_LABEL[range];
   const rangeHint = RANGES.find((r) => r.key === range)?.hint ?? '';
   const summary = data?.summary ?? null;
   const prev = data?.prevSummary ?? null;
-  const trend = full[range]?.trend ?? null;
 
-  const usageCards = useMemo(() => {
-    if (!data) return [];
-    return (['today', '7d', '30d'] as const).flatMap((k) => [
-      { key: `${k}-tokens`, title: `${RANGE_LABEL[k]} Token`, stat: data.cards[k].tokens, sub: `输入 ${formatNumber(data.cards[k].promptTokens)} · 输出 ${formatNumber(data.cards[k].completionTokens)}` },
-      { key: `${k}-requests`, title: `${RANGE_LABEL[k]} 请求`, stat: data.cards[k].requests, sub: null },
-    ]);
-  }, [data]);
+  // 核心指标卡：一行 5 张，全部跟随当前时间 tag
+  const coreCards: CoreCard[] = useMemo(() => {
+    const s = initialLoading ? null : summary;
+    const cards = data?.cards ?? null;
+    return [
+      {
+        title: `${rangeLabel} Token 总量`,
+        icon: 'fa-solid fa-coins',
+        color: 'text-pink-500',
+        bg: 'bg-pink-500/10 dark:bg-pink-500/20',
+        value: s ? formatNumber(s.tokens) : '-',
+        sub: cards ? (
+          <>
+            输入 {formatNumber(cards.promptTokens)} · 输出 {formatNumber(cards.completionTokens)} · 较上期{' '}
+            <ChangeText change={cards.tokens.change} />
+          </>
+        ) : null,
+      },
+      {
+        title: `${rangeLabel}请求数`,
+        icon: 'fa-solid fa-paper-plane',
+        color: 'text-blue-500',
+        bg: 'bg-blue-500/10 dark:bg-blue-500/20',
+        value: s ? formatNumber(s.requests) : '-',
+        sub: cards ? (
+          <>
+            较上期 <ChangeText change={cards.requests.change} />
+          </>
+        ) : null,
+      },
+      {
+        title: `${rangeLabel}成功率`,
+        icon: 'fa-solid fa-circle-check',
+        color: 'text-green-500',
+        bg: 'bg-green-500/10 dark:bg-green-500/20',
+        value: s ? formatPercent(s.successRate) : '-',
+        sub: s ? (
+          <>
+            成功 {formatFull(s.success)} · 错误 <span className="text-error">{formatFull(s.errors)}</span>
+          </>
+        ) : null,
+      },
+      {
+        title: `${rangeLabel}平均延迟`,
+        icon: 'fa-solid fa-gauge-high',
+        color: 'text-purple-500',
+        bg: 'bg-purple-500/10 dark:bg-purple-500/20',
+        value: s ? formatMs(s.avgLatency) : '-',
+        sub:
+          s && prev?.avgLatency && s.avgLatency != null ? (
+            <>
+              较上期 <ChangeText change={(s.avgLatency - prev.avgLatency) / prev.avgLatency} inverse />
+            </>
+          ) : (
+            <>较上期 上期无数据</>
+          ),
+      },
+      {
+        title: `${rangeLabel}P95 延迟`,
+        icon: 'fa-solid fa-stopwatch',
+        color: 'text-orange-500',
+        bg: 'bg-orange-500/10 dark:bg-orange-500/20',
+        value: s ? formatMs(s.p95Latency) : '-',
+        sub: s && prev?.p95Latency != null && s.p95Latency != null ? (
+          <>
+            较上期 <ChangeText change={(s.p95Latency - prev.p95Latency) / prev.p95Latency} inverse />
+          </>
+        ) : (
+          <>较上期 上期无数据</>
+        ),
+      },
+    ];
+  }, [data, initialLoading, rangeLabel]);
+
+  const dimSummary = data
+    ? `模型 ${formatFull(data.modelCount)} 个 · 提供商 ${formatFull(data.providerCount)} 个 · 共 ${formatNumber(data.summary.tokens)} tokens`
+    : null;
 
   return (
     <div className="container mx-auto py-8 space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      {/* ① 页头：标题 + 描述（左）| 时间 tag（右） */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold">管理概览</h1>
-          <p className="text-muted-foreground">查看系统整体状态（用量统计按 Asia/Shanghai 时区切分）</p>
+          <p className="text-muted-foreground">查看系统整体状态</p>
         </div>
         <div className="flex items-center gap-1 rounded-lg border p-1 w-fit">
           {RANGES.map((r) => (
@@ -397,91 +498,9 @@ export default function AdminOverviewPage() {
         </div>
       )}
 
-      {/* 用量数据卡：今天 / 7天 / 30天（带环比） */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        {usageCards.map((card) => (
-          <Card key={card.key}>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-light-text-secondary dark:text-dark-text-secondary">
-                {card.title}
-              </CardTitle>
-              <div className="p-2 rounded-lg bg-pink-500/10 dark:bg-pink-500/20">
-                <i className="fa-solid fa-chart-line text-pink-500" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              {initialLoading ? (
-                <div className="h-9 w-24 animate-pulse bg-primary/10 rounded" />
-              ) : (
-                <>
-                  <div className="text-3xl font-bold tabular-nums">{formatNumber(card.stat.value)}</div>
-                  <div className="mt-1 text-xs text-light-text-secondary dark:text-dark-text-secondary">
-                    较上期 <ChangeText change={card.stat.change} />
-                  </div>
-                  {card.sub && (
-                    <div className="text-[11px] text-light-text-secondary/80 dark:text-dark-text-secondary/80 mt-0.5">{card.sub}</div>
-                  )}
-                </>
-              )}
-            </CardContent>
-          </Card>
-        ))}
-        {initialLoading &&
-          Array.from({ length: 6 }).map((_, i) => (
-            <div key={`sk-${i}`} className="rounded-lg border p-6 space-y-3">
-              <div className="h-4 w-20 animate-pulse bg-primary/10 rounded" />
-              <div className="h-8 w-24 animate-pulse bg-primary/10 rounded" />
-              <div className="h-3 w-28 animate-pulse bg-primary/10 rounded" />
-            </div>
-          ))}
-      </div>
-
-      {/* 跟随窗口：成功率 / 平均延迟 / P95 延迟 */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {[
-          {
-            title: `${rangeLabel}成功率`,
-            icon: 'fa-solid fa-circle-check',
-            color: 'text-green-500',
-            bg: 'bg-green-500/10 dark:bg-green-500/20',
-            value: summary ? formatPercent(summary.successRate) : '-',
-            sub: summary ? (
-              <>
-                成功 {formatFull(summary.success)} · 错误 <span className="text-error">{formatFull(summary.errors)}</span>
-                {prev && (
-                  <>
-                    {' '}
-                    （错误数较上期 <ChangeText change={prev.errors > 0 ? (summary.errors - prev.errors) / prev.errors : null} inverse />)
-                  </>
-                )}
-              </>
-            ) : null,
-          },
-          {
-            title: `${rangeLabel}平均延迟`,
-            icon: 'fa-solid fa-gauge-high',
-            color: 'text-blue-500',
-            bg: 'bg-blue-500/10 dark:bg-blue-500/20',
-            value: summary ? formatMs(summary.avgLatency) : '-',
-            sub: summary && prev?.avgLatency ? (
-              <>
-                较上期 <ChangeText change={(summary.avgLatency! - prev.avgLatency) / prev.avgLatency} inverse />
-              </>
-            ) : null,
-          },
-          {
-            title: `${rangeLabel} P95 延迟`,
-            icon: 'fa-solid fa-stopwatch',
-            color: 'text-orange-500',
-            bg: 'bg-orange-500/10 dark:bg-orange-500/20',
-            value: summary?.p95Latency != null ? formatMs(summary.p95Latency) : hasFullData ? '-' : '—',
-            sub: hasFullData ? null : (
-              <button type="button" className="underline decoration-dotted hover:text-primary" onClick={() => setDetailOpen(true)}>
-                展开完整统计后计算
-              </button>
-            ),
-          },
-        ].map((card) => (
+      {/* ② 核心指标卡：一行 5 张，跟随时间 tag */}
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
+        {coreCards.map((card) => (
           <Card key={card.title}>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-light-text-secondary dark:text-dark-text-secondary">
@@ -493,7 +512,10 @@ export default function AdminOverviewPage() {
             </CardHeader>
             <CardContent>
               {initialLoading ? (
-                <div className="h-9 w-24 animate-pulse bg-primary/10 rounded" />
+                <div className="space-y-2">
+                  <div className="h-9 w-24 animate-pulse bg-primary/10 rounded" />
+                  <div className="h-3 w-28 animate-pulse bg-primary/10 rounded" />
+                </div>
               ) : (
                 <>
                   <div className="text-3xl font-bold tabular-nums">{card.value}</div>
@@ -505,9 +527,9 @@ export default function AdminOverviewPage() {
         ))}
       </div>
 
-      {/* 走势图：默认折叠，点击才加载图表库 + 聚合 */}
+      {/* ③ 用量走势：默认折叠，点击展开才加载图表库 + 聚合 */}
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <CardTitle className="text-lg">
             <i className="fa-solid fa-chart-area mr-2 text-blue-500" />
             用量走势
@@ -515,6 +537,12 @@ export default function AdminOverviewPage() {
               {rangeLabel}（{rangeHint}）
             </span>
           </CardTitle>
+          {chartOpen && (!trend || !chartLibReady) && (
+            <span className="inline-flex items-center gap-2 text-xs text-light-text-secondary dark:text-dark-text-secondary">
+              <i className="fa-solid fa-spinner fa-spin" />
+              加载中…
+            </span>
+          )}
         </CardHeader>
         <CardContent>
           <button
@@ -525,7 +553,7 @@ export default function AdminOverviewPage() {
           >
             <i className={`fa-solid fa-chevron-${chartOpen ? 'up' : 'right'} mr-2`} />
             {chartOpen ? '收起走势图' : '点击展开走势图'}
-            {summary && (
+            {!chartOpen && summary && (
               <span className="ml-2">
                 — {rangeLabel}共 {formatFull(summary.requests)} 次请求 · {formatNumber(summary.tokens)} tokens
               </span>
@@ -543,11 +571,11 @@ export default function AdminOverviewPage() {
                 <>
                   <div>
                     <div className="text-sm font-medium mb-2">Token 用量（输入 / 输出）</div>
-                    <TokenTrendChart data={trend} bucket={full[range]!.bucket} />
+                    <TokenTrendChart data={trend} bucket={fullData!.bucket} loading={!chartLibReady} />
                   </div>
                   <div>
                     <div className="text-sm font-medium mb-2">请求量</div>
-                    <RequestTrendChart data={trend} bucket={full[range]!.bucket} />
+                    <RequestTrendChart data={trend} bucket={fullData!.bucket} loading={!chartLibReady} />
                   </div>
                 </>
               )}
@@ -556,23 +584,28 @@ export default function AdminOverviewPage() {
         </CardContent>
       </Card>
 
-      {/* 模型 / 提供商：首屏只给 Top3，点「查看完整统计」才拉全量 + P95 */}
+      {/* ④ 分布明细：按模型 | 按提供商 双列；默认收起只留一行摘要 */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">
-            按模型 / 提供商明细
+            分布明细
             <span className="ml-2 text-xs font-normal text-light-text-secondary dark:text-dark-text-secondary">
               {rangeLabel}
             </span>
           </h2>
           <button
             type="button"
-            className="text-sm underline decoration-dotted hover:text-primary disabled:opacity-50"
+            className="text-sm underline decoration-dotted hover:text-primary inline-flex items-center"
             onClick={() => setDetailOpen((v) => !v)}
-            disabled={loadingFull && !hasFullData}
+            aria-expanded={detailOpen}
           >
-            {detailOpen ? '收起完整统计' : '查看完整统计'}
-            {loadingFull && !hasFullData && <i className="fa-solid fa-spinner fa-spin ml-1" />}
+            {detailOpen ? '收起' : '查看完整统计'}
+            {fullLoading && (
+              <span className="ml-2 inline-flex items-center gap-1 no-underline">
+                <i className="fa-solid fa-spinner fa-spin" />
+                加载中…
+              </span>
+            )}
           </button>
         </div>
         {initialLoading ? (
@@ -585,26 +618,39 @@ export default function AdminOverviewPage() {
               </div>
             ))}
           </div>
-        ) : data ? (
+        ) : !detailOpen ? (
+          <button
+            type="button"
+            className="w-full text-left text-sm px-4 py-3 rounded-lg border hover:bg-primary/5 transition-colors text-light-text-secondary dark:text-dark-text-secondary"
+            onClick={() => setDetailOpen(true)}
+          >
+            <i className="fa-solid fa-chevron-right mr-2" />
+            {dimSummary ?? '暂无数据'}
+            <span className="ml-2 underline decoration-dotted">，点击查看完整统计</span>
+          </button>
+        ) : !data ? null : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <BreakdownTable
               title="按模型"
               icon="fa-solid fa-cube"
-              rows={isFull ? data.byModel : data.byModel.slice(0, 3)}
+              rows={fullData ? fullData.byModel : data.byModel.slice(0, 3)}
               totalTokens={summary?.tokens ?? 0}
-              full={isFull}
+              full={Boolean(fullData)}
+              loading={fullLoading}
             />
             <BreakdownTable
               title="按提供商"
               icon="fa-solid fa-chart-pie"
-              rows={isFull ? data.byProvider : data.byProvider.slice(0, 3)}
+              rows={fullData ? fullData.byProvider : data.byProvider.slice(0, 3)}
               totalTokens={summary?.tokens ?? 0}
-              full={isFull}
+              full={Boolean(fullData)}
+              loading={fullLoading}
             />
           </div>
-        ) : null}
+        )}
       </div>
 
+      {/* ⑤ 排行榜：用户 | 令牌 双列 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <RankList
           title="用户用量排行"
@@ -622,58 +668,61 @@ export default function AdminOverviewPage() {
         />
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">系统概况</CardTitle>
-        </CardHeader>
-        <CardContent className="grid grid-cols-2 md:grid-cols-3 gap-4">
-          {[
-            { title: '用户总数', value: system?.totalUsers, icon: 'fa-solid fa-users', color: 'text-blue-500' },
-            { title: '活跃令牌', value: system?.totalActiveTokens, icon: 'fa-solid fa-key', color: 'text-green-500' },
-            { title: '上游提供商', value: system?.providerUsage?.length, icon: 'fa-solid fa-server', color: 'text-purple-500' },
-          ].map((card) => (
-            <div key={card.title} className="flex items-center gap-3 p-4 border rounded-lg">
-              <div className="p-2 rounded-lg bg-primary/10">
-                <i className={`${card.icon} ${card.color}`} />
-              </div>
-              <div>
-                <div className="text-sm text-light-text-secondary dark:text-dark-text-secondary">{card.title}</div>
-                <div className="text-2xl font-bold tabular-nums">
-                  {card.value === undefined ? <span className="inline-block h-7 w-12 animate-pulse bg-primary/10 rounded align-middle" /> : card.value}
+      {/* ⑥ 系统概况 + 快速操作：收尾 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">系统概况</CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 gap-4">
+            {[
+              { title: '用户总数', value: system?.totalUsers, icon: 'fa-solid fa-users', color: 'text-blue-500' },
+              { title: '活跃令牌', value: system?.totalActiveTokens, icon: 'fa-solid fa-key', color: 'text-green-500' },
+              { title: '上游提供商', value: system?.providerUsage?.length, icon: 'fa-solid fa-server', color: 'text-purple-500' },
+            ].map((card) => (
+              <div key={card.title} className="flex items-center gap-3 p-4 border rounded-lg">
+                <div className="p-2 rounded-lg bg-primary/10">
+                  <i className={`${card.icon} ${card.color}`} />
+                </div>
+                <div>
+                  <div className="text-sm text-light-text-secondary dark:text-dark-text-secondary">{card.title}</div>
+                  <div className="text-2xl font-bold tabular-nums">
+                    {card.value === undefined ? <span className="inline-block h-7 w-12 animate-pulse bg-primary/10 rounded align-middle" /> : card.value}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
+            ))}
+          </CardContent>
+        </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">快速操作</CardTitle>
-        </CardHeader>
-        <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[
-            { href: '/admin/providers', title: '提供商管理', desc: '配置上游 AI 提供商', icon: 'fa-solid fa-server', color: 'text-purple-500', bg: 'bg-purple-500/10 dark:bg-purple-500/20' },
-            { href: '/admin/desensitization', title: '脱敏规则', desc: '配置数据脱敏规则', icon: 'fa-solid fa-shield-halved', color: 'text-rose-500', bg: 'bg-rose-500/10 dark:bg-rose-500/20' },
-            { href: '/admin/tokens', title: '令牌管理', desc: '管理 API 访问令牌', icon: 'fa-solid fa-key', color: 'text-green-500', bg: 'bg-green-500/10 dark:bg-green-500/20' },
-            { href: '/admin/audit-logs', title: '审计日志', desc: '查看请求日志分析', icon: 'fa-solid fa-scroll', color: 'text-orange-500', bg: 'bg-orange-500/10 dark:bg-orange-500/20' },
-          ].map((a) => (
-            <Link
-              key={a.href}
-              href={a.href}
-              className="flex items-center gap-3 p-4 border rounded-lg hover:bg-primary/5 transition-all duration-200"
-            >
-              <div className={`p-2 rounded-lg ${a.bg}`}>
-                <i className={`${a.icon} ${a.color}`} />
-              </div>
-              <div>
-                <div className="font-medium">{a.title}</div>
-                <div className="text-sm text-light-text-secondary dark:text-dark-text-secondary">{a.desc}</div>
-              </div>
-            </Link>
-          ))}
-        </CardContent>
-      </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">快速操作</CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {[
+              { href: '/admin/providers', title: '提供商管理', desc: '配置上游 AI 提供商', icon: 'fa-solid fa-server', color: 'text-purple-500', bg: 'bg-purple-500/10 dark:bg-purple-500/20' },
+              { href: '/admin/desensitization', title: '脱敏规则', desc: '配置数据脱敏规则', icon: 'fa-solid fa-shield-halved', color: 'text-rose-500', bg: 'bg-rose-500/10 dark:bg-rose-500/20' },
+              { href: '/admin/tokens', title: '令牌管理', desc: '管理 API 访问令牌', icon: 'fa-solid fa-key', color: 'text-green-500', bg: 'bg-green-500/10 dark:bg-green-500/20' },
+              { href: '/admin/audit-logs', title: '审计日志', desc: '查看请求日志分析', icon: 'fa-solid fa-scroll', color: 'text-orange-500', bg: 'bg-orange-500/10 dark:bg-orange-500/20' },
+            ].map((a) => (
+              <Link
+                key={a.href}
+                href={a.href}
+                className="flex items-center gap-3 p-4 border rounded-lg hover:bg-primary/5 transition-all duration-200"
+              >
+                <div className={`p-2 rounded-lg ${a.bg}`}>
+                  <i className={`${a.icon} ${a.color}`} />
+                </div>
+                <div>
+                  <div className="font-medium">{a.title}</div>
+                  <div className="text-sm text-light-text-secondary dark:text-dark-text-secondary">{a.desc}</div>
+                </div>
+              </Link>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

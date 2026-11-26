@@ -34,10 +34,22 @@ interface ChartProps {
   data: StatsTrendPoint[];
   /** hour = 今天按小时，day = 按天 */
   bucket: 'hour' | 'day';
+  /** true = 走势数据或图表库还在加载，显示占位 */
+  loading?: boolean;
+}
+
+function ChartLoading() {
+  return (
+    <div className="h-[280px] flex items-center justify-center text-sm text-light-text-secondary dark:text-dark-text-secondary">
+      <i className="fa-solid fa-spinner fa-spin mr-2" />
+      加载中…
+    </div>
+  );
 }
 
 /** Token 用量走势：输入 / 输出堆叠柱状图 */
-export function TokenTrendChart({ data, bucket }: ChartProps) {
+export function TokenTrendChart({ data, bucket, loading }: ChartProps) {
+  if (loading) return <ChartLoading />;
   return (
     <ResponsiveContainer width="100%" height={280}>
       <BarChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
@@ -71,7 +83,8 @@ export function TokenTrendChart({ data, bucket }: ChartProps) {
 }
 
 /** 请求量走势：折线（成功 / 错误分色） */
-export function RequestTrendChart({ data, bucket }: ChartProps) {
+export function RequestTrendChart({ data, bucket, loading }: ChartProps) {
+  if (loading) return <ChartLoading />;
   return (
     <ResponsiveContainer width="100%" height={280}>
       <AreaChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
