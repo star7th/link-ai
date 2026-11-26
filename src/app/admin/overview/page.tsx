@@ -1,8 +1,25 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { formatChange, formatFull, formatMs, formatNumber, formatPercent } from '@/components/admin-stats/format';
+import type {
+  OverviewStats,
+  StatsBreakdownItem,
+  StatsRange,
+} from '@/lib/admin-stats';
+
+// 图表库只在展开走势图后才加载，不进首屏 bundle
+const TokenTrendChart = dynamic(
+  () => import('@/components/admin-stats/overview-charts').then((m) => m.TokenTrendChart),
+  { ssr: false }
+);
+const RequestTrendChart = dynamic(
+  () => import('@/components/admin-stats/overview-charts').then((m) => m.RequestTrendChart),
+  { ssr: false }
+);
 
 interface ProviderUsage {
   providerId: string;
@@ -11,92 +28,366 @@ interface ProviderUsage {
   requestUsage: number;
 }
 
-interface TopUser {
-  userId: string;
-  username: string | null;
-  name: string | null;
-  tokenUsage: number;
-}
-
-interface OverviewData {
+interface SystemOverview {
   totalUsers: number;
   totalActiveTokens: number;
-  todayRequests: number;
-  todayTokens: number;
   providerUsage: ProviderUsage[];
-  topUsers: TopUser[];
 }
 
-function formatNumber(n: number): string {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
-  return n.toString();
+const RANGES: { key: StatsRange; label: string; hint: string }[] = [
+  { key: 'today', label: '今天', hint: '按小时' },
+  { key: '7d', label: '近7天', hint: '按天' },
+  { key: '30d', label: '近30天', hint: '按天' },
+];
+const RANGE_LABEL: Record<StatsRange, string> = { today: '今天', '7d': '近7天', '30d': '近30天' };
+
+const LS = {
+  range: 'linkai-admin-overview:range',
+  chartOpen: 'linkai-admin-overview:chartOpen',
+  detailOpen: 'linkai-admin-overview:detailOpen',
+};
+
+function readStored(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    /* ignore */
+  }
+}
+
+type SortKey = 'tokens' | 'requests' | 'share' | 'successRate' | 'avgLatency';
+
+function BreakdownTable({
+  title,
+  icon,
+  rows,
+  totalTokens,
+  full,
+}: {
+  title: string;
+  icon: string;
+  rows: StatsBreakdownItem[];
+  totalTokens: number;
+  full: boolean;
+}) {
+  const [sortKey, setSortKey] = useState<SortKey>('tokens');
+  const [desc, setDesc] = useState(true);
+
+  const sorted = useMemo(() => {
+    const list = [...rows];
+    list.sort((a, b) => {
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      // 空值永远排最后
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      return desc ? bv - av : av - bv;
+    });
+    return list;
+  }, [rows, sortKey, desc]);
+
+  const toggleSort = (key: SortKey) => {
+    if (key === sortKey) setDesc((d) => !d);
+    else {
+      setSortKey(key);
+      setDesc(true);
+    }
+  };
+
+  const th = (key: SortKey, label: string, align = 'text-right') => (
+    <th className={`px-3 py-2 ${align} font-medium cursor-pointer select-none whitespace-nowrap`}>
+      <button type="button" className="hover:text-primary" onClick={() => toggleSort(key)}>
+        {label}
+        {sortKey === key ? (desc ? ' ↓' : ' ↑') : ''}
+      </button>
+    </th>
+  );
+
+  if (!rows.length) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">
+            <i className={`${icon} mr-2 text-purple-500`} />
+            {title}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary py-4 text-center">
+            该时间窗口内暂无数据
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg">
+          <i className={`${icon} mr-2 text-purple-500`} />
+          {title}
+          <span className="ml-2 text-xs font-normal text-light-text-secondary dark:text-dark-text-secondary">
+            {full ? `共 ${rows.length} 项` : `Top ${rows.length}`}
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-xs text-light-text-secondary dark:text-dark-text-secondary border-b">
+              <th className="px-3 py-2 text-left font-medium">名称</th>
+              {th('requests', '请求')}
+              {th('tokens', 'Token')}
+              {th('share', '占比')}
+              {th('successRate', '成功率')}
+              {th('avgLatency', '平均延迟')}
+              {full && <th className="px-3 py-2 text-right font-medium">P95 延迟</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((r) => (
+              <tr key={r.key} className="border-b last:border-b-0">
+                <td className="px-3 py-2">
+                  <div className="font-medium truncate max-w-[220px]" title={r.key}>
+                    {r.key}
+                  </div>
+                  <div className="h-1.5 mt-1 w-full bg-primary/10 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary dark:bg-primary/80 rounded-full"
+                      style={{ width: `${Math.min(100, Math.max(r.share * 100, r.tokens > 0 ? 2 : 0))}%` }}
+                    />
+                  </div>
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums">{formatFull(r.requests)}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{formatFull(r.tokens)}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{(r.share * 100).toFixed(1)}%</td>
+                <td className="px-3 py-2 text-right tabular-nums">{formatPercent(r.successRate)}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{formatMs(r.avgLatency)}</td>
+                {full && <td className="px-3 py-2 text-right tabular-nums">{formatMs(r.p95Latency)}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {totalTokens === 0 && <p className="mt-2 text-xs text-muted-foreground">窗口内 Token 为 0，占比不计。</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function RankList({
+  title,
+  icon,
+  items,
+  loading,
+  rangeLabel,
+}: {
+  title: string;
+  icon: string;
+  items: { id: string; name: string; requests: number; tokens: number }[];
+  loading: boolean;
+  rangeLabel: string;
+}) {
+  const max = items[0]?.tokens || 1;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg">
+          <i className={`${icon} mr-2 text-yellow-500`} />
+          {title}
+          <span className="ml-2 text-xs font-normal text-light-text-secondary dark:text-dark-text-secondary">
+            {rangeLabel} · Top 10
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <div className="space-y-3">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-8 animate-pulse bg-primary/10 rounded" />
+            ))}
+          </div>
+        ) : !items.length ? (
+          <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary py-4 text-center">
+            {rangeLabel}暂无数据
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {items.map((item, index) => (
+              <div key={`${item.id}-${index}`} className="flex items-center gap-3">
+                <span className={`w-6 text-center text-sm font-bold ${index < 3 ? 'text-yellow-500' : 'text-muted-foreground'}`}>
+                  {index + 1}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium truncate" title={item.name}>
+                      {item.name}
+                    </span>
+                    <span className="text-xs text-light-text-secondary dark:text-dark-text-secondary ml-2 whitespace-nowrap">
+                      {formatNumber(item.tokens)} tokens · {formatFull(item.requests)} 请求
+                    </span>
+                  </div>
+                  <div className="h-2 bg-primary/10 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary dark:bg-primary/80 rounded-full transition-all"
+                      style={{ width: `${Math.max((item.tokens / max) * 100, 2)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ChangeText({ change, inverse = false }: { change: number | null; inverse?: boolean }) {
+  const c = formatChange(change);
+  let cls = 'text-muted-foreground';
+  if (c.tone === 'up') cls = inverse ? 'text-error' : 'text-green-600 dark:text-green-400';
+  else if (c.tone === 'down') cls = inverse ? 'text-green-600 dark:text-green-400' : 'text-error';
+  return <span className={cls}>{c.text}</span>;
 }
 
 export default function AdminOverviewPage() {
-  const [data, setData] = useState<OverviewData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [range, setRange] = useState<StatsRange>('today');
+  const [chartOpen, setChartOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
 
+  // 首屏轻量数据（按 range 缓存在内存里，切回已加载过的窗口不重复请求）
+  const [light, setLight] = useState<Partial<Record<StatsRange, OverviewStats>>>({});
+  const [full, setFull] = useState<Partial<Record<StatsRange, OverviewStats>>>({});
+  const [loadingLight, setLoadingLight] = useState(true);
+  const [loadingFull, setLoadingFull] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [system, setSystem] = useState<SystemOverview | null>(null);
+
+  // 展开状态记忆
   useEffect(() => {
-    async function fetchOverview() {
-      try {
-        const res = await fetch('/api/admin/quotas/overview');
-        if (!res.ok) throw new Error('请求失败');
-        const json = await res.json();
-        setData(json);
-      } catch (err: any) {
-        setError(err.message || '加载失败');
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchOverview();
+    const r = readStored(LS.range);
+    if (r === 'today' || r === '7d' || r === '30d') setRange(r);
+    setChartOpen(readStored(LS.chartOpen) === '1');
+    setDetailOpen(readStored(LS.detailOpen) === '1');
+    setHydrated(true);
+  }, []);
+  useEffect(() => {
+    if (hydrated) writeStored(LS.range, range);
+  }, [range, hydrated]);
+  useEffect(() => {
+    if (hydrated) writeStored(LS.chartOpen, chartOpen ? '1' : '0');
+  }, [chartOpen, hydrated]);
+  useEffect(() => {
+    if (hydrated) writeStored(LS.detailOpen, detailOpen ? '1' : '0');
+  }, [detailOpen, hydrated]);
+
+  // 系统基础数（用户/令牌/提供商）
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch('/api/admin/quotas/overview', { signal: controller.signal })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('请求失败'))))
+      .then(setSystem)
+      .catch((err: any) => {
+        if (err?.name !== 'AbortError') console.warn(err);
+      });
+    return () => controller.abort();
   }, []);
 
-  const statCards = [
-    {
-      title: '用户总数',
-      value: data?.totalUsers ?? 0,
-      icon: 'fa-solid fa-users',
-      color: 'text-blue-500',
-      bg: 'bg-blue-500/10 dark:bg-blue-500/20',
-    },
-    {
-      title: '活跃令牌',
-      value: data?.totalActiveTokens ?? 0,
-      icon: 'fa-solid fa-key',
-      color: 'text-green-500',
-      bg: 'bg-green-500/10 dark:bg-green-500/20',
-    },
-    {
-      title: '上游提供商',
-      value: data?.providerUsage?.length ?? 0,
-      icon: 'fa-solid fa-server',
-      color: 'text-purple-500',
-      bg: 'bg-purple-500/10 dark:bg-purple-500/20',
-    },
-    {
-      title: '今日请求',
-      value: data?.todayRequests ?? 0,
-      icon: 'fa-solid fa-arrow-right-arrow-left',
-      color: 'text-orange-500',
-      bg: 'bg-orange-500/10 dark:bg-orange-500/20',
-    },
-    {
-      title: '今日Token用量',
-      value: data?.todayTokens ?? 0,
-      icon: 'fa-solid fa-chart-line',
-      color: 'text-pink-500',
-      bg: 'bg-pink-500/10 dark:bg-pink-500/20',
-    },
-  ];
+  // 首屏：当前窗口的轻量数据
+  useEffect(() => {
+    if (!hydrated) return;
+    if (light[range]) return;
+    const controller = new AbortController();
+    setLoadingLight(true);
+    fetch(`/api/admin/overview/stats?range=${range}`, { signal: controller.signal, cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('请求失败'))))
+      .then((json) => {
+        setLight((prev) => ({ ...prev, [range]: json }));
+        setError(null);
+      })
+      .catch((err: any) => {
+        if (err?.name !== 'AbortError') setError(err.message || '加载失败');
+      })
+      .finally(() => setLoadingLight(false));
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range, hydrated]);
+
+  // 点击触发：走势图或完整统计展开时才拉 detail=1
+  const needFull = hydrated && (chartOpen || detailOpen);
+  useEffect(() => {
+    if (!needFull || full[range]) return;
+    const controller = new AbortController();
+    setLoadingFull(true);
+    fetch(`/api/admin/overview/stats?range=${range}&detail=1`, { signal: controller.signal, cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('请求失败'))))
+      .then((json) => {
+        setFull((prev) => ({ ...prev, [range]: json }));
+        setError(null);
+      })
+      .catch((err: any) => {
+        if (err?.name !== 'AbortError') setError(err.message || '加载失败');
+      })
+      .finally(() => setLoadingFull(false));
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range, needFull]);
+
+  const data: OverviewStats | null = full[range] ?? light[range] ?? null;
+  const isFull = Boolean(full[range]);
+  const hasFullData = Boolean(full[range]);
+  const initialLoading = loadingLight && !data;
+
+  const rangeLabel = RANGE_LABEL[range];
+  const rangeHint = RANGES.find((r) => r.key === range)?.hint ?? '';
+  const summary = data?.summary ?? null;
+  const prev = data?.prevSummary ?? null;
+  const trend = full[range]?.trend ?? null;
+
+  const usageCards = useMemo(() => {
+    if (!data) return [];
+    return (['today', '7d', '30d'] as const).flatMap((k) => [
+      { key: `${k}-tokens`, title: `${RANGE_LABEL[k]} Token`, stat: data.cards[k].tokens, sub: `输入 ${formatNumber(data.cards[k].promptTokens)} · 输出 ${formatNumber(data.cards[k].completionTokens)}` },
+      { key: `${k}-requests`, title: `${RANGE_LABEL[k]} 请求`, stat: data.cards[k].requests, sub: null },
+    ]);
+  }, [data]);
 
   return (
     <div className="container mx-auto py-8 space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold">管理概览</h1>
-        <p className="text-muted-foreground">查看系统整体状态</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">管理概览</h1>
+          <p className="text-muted-foreground">查看系统整体状态（用量统计按 Asia/Shanghai 时区切分）</p>
+        </div>
+        <div className="flex items-center gap-1 rounded-lg border p-1 w-fit">
+          {RANGES.map((r) => (
+            <button
+              key={r.key}
+              type="button"
+              onClick={() => setRange(r.key)}
+              className={`px-3 py-1.5 rounded-md text-sm transition-colors ${
+                range === r.key
+                  ? 'bg-primary text-primary-foreground'
+                  : 'hover:bg-primary/5 text-light-text-secondary dark:text-dark-text-secondary'
+              }`}
+              aria-pressed={range === r.key}
+            >
+              {r.label}
+              <span className="ml-1 text-[10px] opacity-70">{r.hint}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {error && (
@@ -106,8 +397,91 @@ export default function AdminOverviewPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        {statCards.map((card) => (
+      {/* 用量数据卡：今天 / 7天 / 30天（带环比） */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+        {usageCards.map((card) => (
+          <Card key={card.key}>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium text-light-text-secondary dark:text-dark-text-secondary">
+                {card.title}
+              </CardTitle>
+              <div className="p-2 rounded-lg bg-pink-500/10 dark:bg-pink-500/20">
+                <i className="fa-solid fa-chart-line text-pink-500" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              {initialLoading ? (
+                <div className="h-9 w-24 animate-pulse bg-primary/10 rounded" />
+              ) : (
+                <>
+                  <div className="text-3xl font-bold tabular-nums">{formatNumber(card.stat.value)}</div>
+                  <div className="mt-1 text-xs text-light-text-secondary dark:text-dark-text-secondary">
+                    较上期 <ChangeText change={card.stat.change} />
+                  </div>
+                  {card.sub && (
+                    <div className="text-[11px] text-light-text-secondary/80 dark:text-dark-text-secondary/80 mt-0.5">{card.sub}</div>
+                  )}
+                </>
+              )}
+            </CardContent>
+          </Card>
+        ))}
+        {initialLoading &&
+          Array.from({ length: 6 }).map((_, i) => (
+            <div key={`sk-${i}`} className="rounded-lg border p-6 space-y-3">
+              <div className="h-4 w-20 animate-pulse bg-primary/10 rounded" />
+              <div className="h-8 w-24 animate-pulse bg-primary/10 rounded" />
+              <div className="h-3 w-28 animate-pulse bg-primary/10 rounded" />
+            </div>
+          ))}
+      </div>
+
+      {/* 跟随窗口：成功率 / 平均延迟 / P95 延迟 */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {[
+          {
+            title: `${rangeLabel}成功率`,
+            icon: 'fa-solid fa-circle-check',
+            color: 'text-green-500',
+            bg: 'bg-green-500/10 dark:bg-green-500/20',
+            value: summary ? formatPercent(summary.successRate) : '-',
+            sub: summary ? (
+              <>
+                成功 {formatFull(summary.success)} · 错误 <span className="text-error">{formatFull(summary.errors)}</span>
+                {prev && (
+                  <>
+                    {' '}
+                    （错误数较上期 <ChangeText change={prev.errors > 0 ? (summary.errors - prev.errors) / prev.errors : null} inverse />)
+                  </>
+                )}
+              </>
+            ) : null,
+          },
+          {
+            title: `${rangeLabel}平均延迟`,
+            icon: 'fa-solid fa-gauge-high',
+            color: 'text-blue-500',
+            bg: 'bg-blue-500/10 dark:bg-blue-500/20',
+            value: summary ? formatMs(summary.avgLatency) : '-',
+            sub: summary && prev?.avgLatency ? (
+              <>
+                较上期 <ChangeText change={(summary.avgLatency! - prev.avgLatency) / prev.avgLatency} inverse />
+              </>
+            ) : null,
+          },
+          {
+            title: `${rangeLabel} P95 延迟`,
+            icon: 'fa-solid fa-stopwatch',
+            color: 'text-orange-500',
+            bg: 'bg-orange-500/10 dark:bg-orange-500/20',
+            value: summary?.p95Latency != null ? formatMs(summary.p95Latency) : hasFullData ? '-' : '—',
+            sub: hasFullData ? null : (
+              <button type="button" className="underline decoration-dotted hover:text-primary" onClick={() => setDetailOpen(true)}>
+                展开完整统计后计算
+              </button>
+            ),
+          },
+        ].map((card) => (
           <Card key={card.title}>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-light-text-secondary dark:text-dark-text-secondary">
@@ -118,177 +492,188 @@ export default function AdminOverviewPage() {
               </div>
             </CardHeader>
             <CardContent>
-              {loading ? (
+              {initialLoading ? (
                 <div className="h-9 w-24 animate-pulse bg-primary/10 rounded" />
               ) : (
-                <div className="text-3xl font-bold">{formatNumber(card.value)}</div>
+                <>
+                  <div className="text-3xl font-bold tabular-nums">{card.value}</div>
+                  <div className="mt-1 text-xs text-light-text-secondary dark:text-dark-text-secondary">{card.sub}</div>
+                </>
               )}
             </CardContent>
           </Card>
         ))}
       </div>
 
+      {/* 走势图：默认折叠，点击才加载图表库 + 聚合 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">
+            <i className="fa-solid fa-chart-area mr-2 text-blue-500" />
+            用量走势
+            <span className="ml-2 text-xs font-normal text-light-text-secondary dark:text-dark-text-secondary">
+              {rangeLabel}（{rangeHint}）
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <button
+            type="button"
+            className="w-full text-left text-sm text-light-text-secondary dark:text-dark-text-secondary hover:text-primary transition-colors"
+            onClick={() => setChartOpen((v) => !v)}
+            aria-expanded={chartOpen}
+          >
+            <i className={`fa-solid fa-chevron-${chartOpen ? 'up' : 'right'} mr-2`} />
+            {chartOpen ? '收起走势图' : '点击展开走势图'}
+            {summary && (
+              <span className="ml-2">
+                — {rangeLabel}共 {formatFull(summary.requests)} 次请求 · {formatNumber(summary.tokens)} tokens
+              </span>
+            )}
+          </button>
+          {chartOpen && (
+            <div className="mt-4 space-y-6">
+              {!trend ? (
+                <div className="space-y-6">
+                  {Array.from({ length: 2 }).map((_, i) => (
+                    <div key={i} className="h-[280px] animate-pulse bg-primary/10 rounded" />
+                  ))}
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <div className="text-sm font-medium mb-2">Token 用量（输入 / 输出）</div>
+                    <TokenTrendChart data={trend} bucket={full[range]!.bucket} />
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium mb-2">请求量</div>
+                    <RequestTrendChart data={trend} bucket={full[range]!.bucket} />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* 模型 / 提供商：首屏只给 Top3，点「查看完整统计」才拉全量 + P95 */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">
+            按模型 / 提供商明细
+            <span className="ml-2 text-xs font-normal text-light-text-secondary dark:text-dark-text-secondary">
+              {rangeLabel}
+            </span>
+          </h2>
+          <button
+            type="button"
+            className="text-sm underline decoration-dotted hover:text-primary disabled:opacity-50"
+            onClick={() => setDetailOpen((v) => !v)}
+            disabled={loadingFull && !hasFullData}
+          >
+            {detailOpen ? '收起完整统计' : '查看完整统计'}
+            {loadingFull && !hasFullData && <i className="fa-solid fa-spinner fa-spin ml-1" />}
+          </button>
+        </div>
+        {initialLoading ? (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {Array.from({ length: 2 }).map((_, i) => (
+              <div key={i} className="rounded-lg border p-6 space-y-3">
+                {Array.from({ length: 4 }).map((_, j) => (
+                  <div key={j} className="h-8 animate-pulse bg-primary/10 rounded" />
+                ))}
+              </div>
+            ))}
+          </div>
+        ) : data ? (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <BreakdownTable
+              title="按模型"
+              icon="fa-solid fa-cube"
+              rows={isFull ? data.byModel : data.byModel.slice(0, 3)}
+              totalTokens={summary?.tokens ?? 0}
+              full={isFull}
+            />
+            <BreakdownTable
+              title="按提供商"
+              icon="fa-solid fa-chart-pie"
+              rows={isFull ? data.byProvider : data.byProvider.slice(0, 3)}
+              totalTokens={summary?.tokens ?? 0}
+              full={isFull}
+            />
+          </div>
+        ) : null}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <RankList
+          title="用户用量排行"
+          icon="fa-solid fa-ranking-star"
+          items={data?.topUsers ?? []}
+          loading={initialLoading}
+          rangeLabel={rangeLabel}
+        />
+        <RankList
+          title="令牌用量排行"
+          icon="fa-solid fa-key"
+          items={data?.topTokens ?? []}
+          loading={initialLoading}
+          rangeLabel={rangeLabel}
+        />
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">系统概况</CardTitle>
+        </CardHeader>
+        <CardContent className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          {[
+            { title: '用户总数', value: system?.totalUsers, icon: 'fa-solid fa-users', color: 'text-blue-500' },
+            { title: '活跃令牌', value: system?.totalActiveTokens, icon: 'fa-solid fa-key', color: 'text-green-500' },
+            { title: '上游提供商', value: system?.providerUsage?.length, icon: 'fa-solid fa-server', color: 'text-purple-500' },
+          ].map((card) => (
+            <div key={card.title} className="flex items-center gap-3 p-4 border rounded-lg">
+              <div className="p-2 rounded-lg bg-primary/10">
+                <i className={`${card.icon} ${card.color}`} />
+              </div>
+              <div>
+                <div className="text-sm text-light-text-secondary dark:text-dark-text-secondary">{card.title}</div>
+                <div className="text-2xl font-bold tabular-nums">
+                  {card.value === undefined ? <span className="inline-block h-7 w-12 animate-pulse bg-primary/10 rounded align-middle" /> : card.value}
+                </div>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">快速操作</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Link
-            href="/admin/providers"
-            className="flex items-center gap-3 p-4 border rounded-lg hover:bg-primary/5 transition-all duration-200"
-          >
-            <div className="p-2 rounded-lg bg-purple-500/10 dark:bg-purple-500/20">
-              <i className="fa-solid fa-server text-purple-500" />
-            </div>
-            <div>
-              <div className="font-medium">提供商管理</div>
-              <div className="text-sm text-light-text-secondary dark:text-dark-text-secondary">配置上游 AI 提供商</div>
-            </div>
-          </Link>
-          <Link
-            href="/admin/desensitization"
-            className="flex items-center gap-3 p-4 border rounded-lg hover:bg-primary/5 transition-all duration-200"
-          >
-            <div className="p-2 rounded-lg bg-rose-500/10 dark:bg-rose-500/20">
-              <i className="fa-solid fa-shield-halved text-rose-500" />
-            </div>
-            <div>
-              <div className="font-medium">脱敏规则</div>
-              <div className="text-sm text-light-text-secondary dark:text-dark-text-secondary">配置数据脱敏规则</div>
-            </div>
-          </Link>
-          <Link
-            href="/admin/tokens"
-            className="flex items-center gap-3 p-4 border rounded-lg hover:bg-primary/5 transition-all duration-200"
-          >
-            <div className="p-2 rounded-lg bg-green-500/10 dark:bg-green-500/20">
-              <i className="fa-solid fa-key text-green-500" />
-            </div>
-            <div>
-              <div className="font-medium">令牌管理</div>
-              <div className="text-sm text-light-text-secondary dark:text-dark-text-secondary">管理 API 访问令牌</div>
-            </div>
-          </Link>
-          <Link
-            href="/admin/audit-logs"
-            className="flex items-center gap-3 p-4 border rounded-lg hover:bg-primary/5 transition-all duration-200"
-          >
-            <div className="p-2 rounded-lg bg-orange-500/10 dark:bg-orange-500/20">
-              <i className="fa-solid fa-scroll text-orange-500" />
-            </div>
-            <div>
-              <div className="font-medium">审计日志</div>
-              <div className="text-sm text-light-text-secondary dark:text-dark-text-secondary">查看请求日志分析</div>
-            </div>
-          </Link>
+          {[
+            { href: '/admin/providers', title: '提供商管理', desc: '配置上游 AI 提供商', icon: 'fa-solid fa-server', color: 'text-purple-500', bg: 'bg-purple-500/10 dark:bg-purple-500/20' },
+            { href: '/admin/desensitization', title: '脱敏规则', desc: '配置数据脱敏规则', icon: 'fa-solid fa-shield-halved', color: 'text-rose-500', bg: 'bg-rose-500/10 dark:bg-rose-500/20' },
+            { href: '/admin/tokens', title: '令牌管理', desc: '管理 API 访问令牌', icon: 'fa-solid fa-key', color: 'text-green-500', bg: 'bg-green-500/10 dark:bg-green-500/20' },
+            { href: '/admin/audit-logs', title: '审计日志', desc: '查看请求日志分析', icon: 'fa-solid fa-scroll', color: 'text-orange-500', bg: 'bg-orange-500/10 dark:bg-orange-500/20' },
+          ].map((a) => (
+            <Link
+              key={a.href}
+              href={a.href}
+              className="flex items-center gap-3 p-4 border rounded-lg hover:bg-primary/5 transition-all duration-200"
+            >
+              <div className={`p-2 rounded-lg ${a.bg}`}>
+                <i className={`${a.icon} ${a.color}`} />
+              </div>
+              <div>
+                <div className="font-medium">{a.title}</div>
+                <div className="text-sm text-light-text-secondary dark:text-dark-text-secondary">{a.desc}</div>
+              </div>
+            </Link>
+          ))}
         </CardContent>
       </Card>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">
-              <i className="fa-solid fa-ranking-star mr-2 text-yellow-500" />
-              今日用户用量排行
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="space-y-3">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="h-8 animate-pulse bg-primary/10 rounded" />
-                ))}
-              </div>
-            ) : !data?.topUsers?.length ? (
-              <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary py-4 text-center">
-                今日暂无数据
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {data.topUsers.map((user, index) => {
-                  const maxUsage = data.topUsers[0]?.tokenUsage || 1;
-                  const percent = Math.max((user.tokenUsage / maxUsage) * 100, 2);
-                  return (
-                    <div key={user.userId} className="flex items-center gap-3">
-                      <span className={`w-6 text-center text-sm font-bold ${index < 3 ? 'text-yellow-500' : 'text-muted-foreground'}`}>
-                        {index + 1}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-sm font-medium truncate">
-                            {user.name || user.username || user.userId}
-                          </span>
-                          <span className="text-xs text-light-text-secondary dark:text-dark-text-secondary ml-2 whitespace-nowrap">
-                            {formatNumber(user.tokenUsage)} tokens
-                          </span>
-                        </div>
-                        <div className="h-2 bg-primary/10 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-primary dark:bg-primary/80 rounded-full transition-all"
-                            style={{ width: `${percent}%` }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">
-              <i className="fa-solid fa-chart-pie mr-2 text-purple-500" />
-              提供商用量分布
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="space-y-3">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="h-8 animate-pulse bg-primary/10 rounded" />
-                ))}
-              </div>
-            ) : !data?.providerUsage?.length ? (
-              <p className="text-sm text-light-text-secondary dark:text-dark-text-secondary py-4 text-center">
-                今日暂无数据
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {data.providerUsage
-                  .sort((a, b) => b.tokenUsage - a.tokenUsage)
-                  .map((provider) => {
-                    const maxUsage = data.providerUsage.reduce(
-                      (max, p) => Math.max(max, p.tokenUsage),
-                      1
-                    );
-                    const percent = Math.max((provider.tokenUsage / maxUsage) * 100, 2);
-                    return (
-                      <div key={provider.providerId}>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-sm font-medium">{provider.providerName}</span>
-                          <div className="text-xs text-light-text-secondary dark:text-dark-text-secondary">
-                            <span>{formatNumber(provider.tokenUsage)} tokens</span>
-                            <span className="mx-1">·</span>
-                            <span>{provider.requestUsage} 请求</span>
-                          </div>
-                        </div>
-                        <div className="h-2 bg-primary/10 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-primary dark:bg-primary/80 rounded-full transition-all"
-                            style={{ width: `${percent}%` }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
     </div>
   );
 }
