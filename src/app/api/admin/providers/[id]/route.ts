@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { decrypt, encrypt } from '@/lib/crypto';
 import { getServerSession } from 'next-auth/next';
 import { buildAuthOptions } from '@/app/api/auth/[...nextauth]/route';
+import { getProviderTokenSpeeds } from '@/lib/providers/token-speed';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,7 +33,17 @@ export async function GET(
     return NextResponse.json({ error: 'Provider not found' }, { status: 404 });
   }
 
-  return NextResponse.json({ ...provider, apiKeyEncrypted: '***' });
+  const speeds = await getProviderTokenSpeeds([provider.id]);
+
+  return NextResponse.json({
+    ...provider,
+    apiKeyEncrypted: '***',
+    // 今天 / 最近 30 天两个窗口各自独立，无数据为 null，前端显示空白
+    avgTokenSpeedToday: speeds.get(provider.id)?.avgTokenSpeedToday ?? null,
+    avgTokenSpeed30d: speeds.get(provider.id)?.avgTokenSpeed30d ?? null,
+    // 按模型明细（两个窗口）；无数据为空数组
+    modelSpeeds: speeds.get(provider.id)?.modelSpeeds ?? [],
+  });
 }
 
 export async function PATCH(

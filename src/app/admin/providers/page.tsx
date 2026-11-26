@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { Fragment, useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { formatTokenSpeed } from "@/lib/providers/token-speed";
 
 interface Provider {
   id: number;
@@ -21,6 +22,16 @@ interface Provider {
   modelRedirect: string | null;
   timeoutMs: number | null;
   streamTimeoutMs: number | null;
+  /** 今天的平均 token 速度（tok/s），无数据为 null */
+  avgTokenSpeedToday: number | null;
+  /** 最近 30 天的平均 token 速度（tok/s），无数据为 null */
+  avgTokenSpeed30d: number | null;
+  /** 按模型平均速度明细（今天 / 最近 30 天），无数据为空数组 */
+  modelSpeeds: Array<{
+    model: string;
+    avgTokenSpeedToday: number | null;
+    avgTokenSpeed30d: number | null;
+  }>;
   createdAt: string;
 }
 
@@ -766,6 +777,9 @@ export default function AdminProvidersPage() {
     isDestructive: boolean;
   }>({ isOpen: false, title: "", message: "", onConfirm: () => {}, isDestructive: false });
 
+  // 当前展开模型速度明细的供应商 id
+  const [expandedSpeedId, setExpandedSpeedId] = useState<number | null>(null);
+
   const limit = 20;
 
   const fetchProviders = useCallback(async () => {
@@ -872,6 +886,7 @@ export default function AdminProvidersPage() {
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell">协议类型</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell">API地址</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground">健康状态</th>
+                  <th className="text-left py-3 px-4 font-medium text-muted-foreground">平均 token 速度</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell">RPM限制</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground">状态</th>
                   <th className="text-right py-3 px-4 font-medium text-muted-foreground">操作</th>
@@ -880,20 +895,20 @@ export default function AdminProvidersPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={8} className="text-center py-8 text-muted-foreground">
+                    <td colSpan={9} className="text-center py-8 text-muted-foreground">
                       加载中...
                     </td>
                   </tr>
                 ) : providers.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="text-center py-8 text-muted-foreground">
+                    <td colSpan={9} className="text-center py-8 text-muted-foreground">
                       暂无提供商数据
                     </td>
                   </tr>
                 ) : (
                   providers.map((provider) => (
+                    <Fragment key={provider.id}>
                     <tr
-                      key={provider.id}
                       className="border-b border-primary/10 hover:bg-primary/5 transition-colors"
                     >
                       <td className="py-3 px-4 font-medium">{provider.name}</td>
@@ -912,6 +927,24 @@ export default function AdminProvidersPage() {
                       </td>
                       <td className="py-3 px-4">
                         <HealthBadge status={provider.healthStatus} />
+                      </td>
+                      <td className="py-3 px-4 tabular-nums whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1">
+                          {formatTokenSpeed(provider.avgTokenSpeedToday, provider.avgTokenSpeed30d)}
+                          {provider.modelSpeeds.length > 0 && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 px-1.5 text-xs"
+                              aria-expanded={expandedSpeedId === provider.id}
+                              onClick={() =>
+                                setExpandedSpeedId((prev) => (prev === provider.id ? null : provider.id))
+                              }
+                            >
+                              {expandedSpeedId === provider.id ? "收起" : "按模型"}
+                            </Button>
+                          )}
+                        </span>
                       </td>
                       <td className="py-3 px-4 hidden lg:table-cell">
                         {provider.totalRpmLimit ?? "-"}
@@ -958,7 +991,32 @@ export default function AdminProvidersPage() {
                         </div>
                       </td>
                     </tr>
-                  ))
+                    {expandedSpeedId === provider.id && (
+                      <tr className="border-b border-primary/10 bg-primary/5">
+                        <td colSpan={9} className="px-4 py-3">
+                          <div className="text-xs font-medium text-muted-foreground mb-2">
+                            按模型平均 token 速度（今日 / 最近 30 天，按 30 日速度降序）
+                          </div>
+                          {provider.modelSpeeds.length === 0 ? (
+                            <div className="text-sm text-muted-foreground">暂无数据</div>
+                          ) : (
+                            <div className="flex flex-wrap gap-2">
+                              {provider.modelSpeeds.map((m) => (
+                                <span
+                                  key={m.model}
+                                  className="inline-flex items-center gap-2 rounded-md border border-primary/15 bg-background px-2.5 py-1 text-xs"
+                                >
+                                  <code>{m.model}</code>
+                                  <span className="tabular-nums">{formatTokenSpeed(m.avgTokenSpeedToday, m.avgTokenSpeed30d)}</span>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
+                    ))
                 )}
               </tbody>
             </table>
