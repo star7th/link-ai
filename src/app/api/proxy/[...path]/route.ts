@@ -8,6 +8,7 @@ import { resolveProxyUrl } from '@/lib/proxy/adapter/base';
 import { decrypt } from '@/lib/crypto';
 import { isAuditLogFullBodyEnabled } from '@/lib/system-config';
 import { resolveTimeout } from '@/lib/proxy/timeout';
+import { prepareStreamUsageInjection, retryWithoutInjection, applyUsageFallback, extractNonStreamResponseText } from '@/lib/proxy/usage';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -539,6 +540,7 @@ async function handleRequest(
         const apiKey = decrypt(tp.provider.apiKeyEncrypted);
         const url = resolveProxyUrl(tp.provider.apiBaseUrl, path);
         const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
+        const usageInjection = prepareStreamUsageInjection(redirectedBody, path, tp.provider.protocolType, tp.provider.id);
 
         const headers: Record<string, string> = {
           'Authorization': `Bearer ${apiKey}`,
@@ -548,25 +550,28 @@ async function handleRequest(
         };
 
         try {
-          const bodyStr = JSON.stringify(redirectedBody);
-          const bodySize = new Blob([bodyStr]).size;
-          const timeoutMs = resolveTimeout(tp.provider.timeoutMs, tp.provider.streamTimeoutMs, bodySize, true);
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), timeoutMs);
-
+          const sendUpstream = async (payload: any) => {
+            const bodyStr = JSON.stringify(payload);
+            const bodySize = new Blob([bodyStr]).size;
+            const timeoutMs = resolveTimeout(tp.provider.timeoutMs, tp.provider.streamTimeoutMs, bodySize, true);
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+              return await fetch(url, { method: request.method, headers, body: bodyStr, signal: controller.signal });
+            } finally {
+              clearTimeout(timer);
+            }
+          };
+          
           let upstream: Response;
           try {
-            upstream = await fetch(url, {
-              method: request.method,
-              headers,
-              body: bodyStr,
-              signal: controller.signal
-            });
+            upstream = await sendUpstream(usageInjection.body);
+            if (usageInjection.injected) {
+              upstream = await retryWithoutInjection(upstream, () => sendUpstream(redirectedBody), tp.provider.id);
+            }
           } catch (fetchErr: any) {
-            clearTimeout(timer);
             throw new Error(`Upstream stream request failed: ${fetchErr.name === 'AbortError' ? 'timeout' : fetchErr.message}`);
           }
-          clearTimeout(timer);
 
           if (upstream.ok && upstream.body) {
             const buffered = await bufferUpstreamStream(upstream);
@@ -590,7 +595,9 @@ async function handleRequest(
               {
                 onDone(fullText) {
                   const completeText = buffered.fullText + fullText;
-                  const usage = isResponsesApi ? extractResponsesStreamUsage(completeText) : extractStreamUsage(completeText);
+                  const extractedUsage = isResponsesApi ? extractResponsesStreamUsage(completeText) : extractStreamUsage(completeText);
+                  const readableText = isResponsesApi ? extractResponsesReadableText(completeText) : extractReadableText(completeText);
+                  const usage = applyUsageFallback(extractedUsage, readableText);
 
                   if (usage.totalTokens > 0) {
                     const period = quotaEngine.store.getCurrentPeriod(token.quotaPeriod);
@@ -599,7 +606,6 @@ async function handleRequest(
 
                   isAuditLogFullBodyEnabled().then((logFullBody) => {
                     const hasHits = desensitizeHitResults.length > 0;
-                    const readableText = isResponsesApi ? extractResponsesReadableText(completeText) : extractReadableText(completeText);
                     auditLogger.log({
                       tokenId: token.id,
                       userId: token.userId,
@@ -744,6 +750,7 @@ async function handleRequest(
         const url = resolveProxyUrl(tp.provider.apiBaseUrl, path);
 
         const redirectedBody = applyModelRedirect(body, providerConfig?.modelRedirect || null);
+        const usageInjection = prepareStreamUsageInjection(redirectedBody, path, tp.provider.protocolType, tp.provider.id);
 
         const headers: Record<string, string> = {
           'Authorization': `Bearer ${apiKey}`,
@@ -753,25 +760,28 @@ async function handleRequest(
         };
 
         try {
-          const bodyStr = JSON.stringify(redirectedBody);
-          const bodySize = new Blob([bodyStr]).size;
-          const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, bodySize, true);
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), timeoutMs);
-
+          const sendUpstream = async (payload: any) => {
+            const bodyStr = JSON.stringify(payload);
+            const bodySize = new Blob([bodyStr]).size;
+            const timeoutMs = resolveTimeout(providerConfig?.timeoutMs, providerConfig?.streamTimeoutMs, bodySize, true);
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+              return await fetch(url, { method: request.method, headers, body: bodyStr, signal: controller.signal });
+            } finally {
+              clearTimeout(timer);
+            }
+          };
+          
           let upstream: Response;
           try {
-            upstream = await fetch(url, {
-              method: request.method,
-              headers,
-              body: bodyStr,
-              signal: controller.signal
-            });
+            upstream = await sendUpstream(usageInjection.body);
+            if (usageInjection.injected) {
+              upstream = await retryWithoutInjection(upstream, () => sendUpstream(redirectedBody), tp.provider.id);
+            }
           } catch (fetchErr: any) {
-            clearTimeout(timer);
             throw new Error(`Upstream stream request failed: ${fetchErr.name === 'AbortError' ? 'timeout' : fetchErr.message}`);
           }
-          clearTimeout(timer);
 
           if (upstream.ok && upstream.body) {
             // Buffer initial stream data to detect early failures
@@ -817,7 +827,9 @@ async function handleRequest(
                 onDone(fullText) {
                   // Prepend any text already accumulated during buffering
                   const completeText = buffered.fullText + fullText;
-                  const usage = isResponsesApi ? extractResponsesStreamUsage(completeText) : extractStreamUsage(completeText);
+                  const extractedUsage = isResponsesApi ? extractResponsesStreamUsage(completeText) : extractStreamUsage(completeText);
+                  const readableText = isResponsesApi ? extractResponsesReadableText(completeText) : extractReadableText(completeText);
+                  const usage = applyUsageFallback(extractedUsage, readableText);
 
                   if (usage.totalTokens > 0) {
                     const period = quotaEngine.store.getCurrentPeriod(token.quotaPeriod);
@@ -826,7 +838,6 @@ async function handleRequest(
 
                   isAuditLogFullBodyEnabled().then((logFullBody) => {
                     const hasHits = desensitizeHitResults.length > 0;
-                    const readableText = isResponsesApi ? extractResponsesReadableText(completeText) : extractReadableText(completeText);
                     auditLogger.log({
                       tokenId: token.id,
                       userId: token.userId,
@@ -984,9 +995,13 @@ async function handleRequest(
     rateLimiter.record('token', token.id, 'rpm');
 
     const respUsage = result.response.body?.usage;
-    const totalTokens = respUsage?.total_tokens || 0;
-    const promptTokens = (isResponsesApi ? respUsage?.input_tokens : respUsage?.prompt_tokens) || 0;
-    const completionTokens = (isResponsesApi ? respUsage?.output_tokens : respUsage?.completion_tokens) || 0;
+    const rawTotalTokens = respUsage?.total_tokens || 0;
+    const rawPromptTokens = (isResponsesApi ? respUsage?.input_tokens : respUsage?.prompt_tokens) || 0;
+    const rawCompletionTokens = (isResponsesApi ? respUsage?.output_tokens : respUsage?.completion_tokens) || 0;
+    const { promptTokens, completionTokens, totalTokens } = applyUsageFallback(
+      { promptTokens: rawPromptTokens, completionTokens: rawCompletionTokens, totalTokens: rawTotalTokens },
+      extractNonStreamResponseText(result.response.body, isResponsesApi)
+    );
     if (totalTokens > 0) {
       const period = quotaEngine.store.getCurrentPeriod(token.quotaPeriod);
       quotaEngine.recordUsage('token', token.id, totalTokens, period);
