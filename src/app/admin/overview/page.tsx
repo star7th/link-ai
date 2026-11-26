@@ -11,15 +11,52 @@ import type {
   StatsRange,
 } from '@/lib/admin-stats';
 
-// 图表库只在展开走势图后才加载，不进首屏 bundle
-let markChartLibReady: () => void = () => {};
-const loadCharts = () =>
-  import('@/components/admin-stats/overview-charts').then((m) => {
-    markChartLibReady();
-    return m;
-  });
+// 图表库只在展开走势图后才加载，不进首屏 bundle。
+// 就绪状态由页面组件实例自己的 useEffect 跟踪（见下方「图表库」effect）：
+// next/dynamic 的 loader 每个模块只执行一次，不能靠 loader 里的回调通知组件，
+// 否则页面二次挂载（SPA 内离开再回来）时 loader 不会再跑，组件永远等不到就绪信号。
+const loadCharts = () => import('@/components/admin-stats/overview-charts');
 const TokenTrendChart = dynamic(() => loadCharts().then((m) => m.TokenTrendChart), { ssr: false });
 const RequestTrendChart = dynamic(() => loadCharts().then((m) => m.RequestTrendChart), { ssr: false });
+
+/** 走势图区块的失败占位：与图表内「加载中」同高同风格，带重试入口 */
+function ChartLoadingPlaceholder() {
+  return (
+    <div className="h-[280px] flex items-center justify-center text-sm text-light-text-secondary dark:text-dark-text-secondary">
+      <i className="fa-solid fa-spinner fa-spin mr-2" />
+      加载中…
+    </div>
+  );
+}
+
+function ChartLoadError({
+  message,
+  onRetry,
+  onReload,
+}: {
+  message: string;
+  onRetry: () => void;
+  onReload?: () => void;
+}) {
+  return (
+    <div className="h-[280px] flex flex-col items-center justify-center gap-3 text-sm text-light-text-secondary dark:text-dark-text-secondary">
+      <span>
+        <i className="fa-solid fa-circle-exclamation mr-2 text-error" />
+        {message}
+      </span>
+      <span className="flex items-center gap-4">
+        <button type="button" onClick={onRetry} className="underline decoration-dotted hover:text-primary">
+          重试
+        </button>
+        {onReload && (
+          <button type="button" onClick={onReload} className="underline decoration-dotted hover:text-primary">
+            刷新页面
+          </button>
+        )}
+      </span>
+    </div>
+  );
+}
 
 interface ProviderUsage {
   providerId: string;
@@ -40,6 +77,31 @@ const RANGES: { key: StatsRange; label: string; hint: string }[] = [
   { key: '30d', label: '近30天', hint: '按天' },
 ];
 const RANGE_LABEL: Record<StatsRange, string> = { today: '今天', '7d': '近7天', '30d': '近30天' };
+
+// 统计数据的模块级内存缓存：SPA 内离开再回到概览页时组件实例会重建（state 清零），
+// 缓存在实例之外才活得下来——切回时 TTL 内已加载过的窗口直接命中，不再发请求；
+// 超过 TTL 视为过期（「今天」窗口的数据会变），下次挂载照常重新请求。
+const STATS_CACHE_TTL = 60_000;
+interface CachedEntry<T> {
+  at: number;
+  data: T;
+}
+function cacheGet<T>(entry: CachedEntry<T> | null | undefined): T | null {
+  return entry && Date.now() - entry.at < STATS_CACHE_TTL ? entry.data : null;
+}
+const statsCache: {
+  light: Partial<Record<StatsRange, CachedEntry<OverviewStats>>>;
+  full: Partial<Record<StatsRange, CachedEntry<OverviewStats>>>;
+  system: CachedEntry<SystemOverview> | null;
+} = { light: {}, full: {}, system: null };
+function cachedRange(map: Partial<Record<StatsRange, CachedEntry<OverviewStats>>>): Partial<Record<StatsRange, OverviewStats>> {
+  const out: Partial<Record<StatsRange, OverviewStats>> = {};
+  for (const r of ['today', '7d', '30d'] as StatsRange[]) {
+    const hit = cacheGet(map[r]);
+    if (hit) out[r] = hit;
+  }
+  return out;
+}
 
 const LS = {
   range: 'linkai-admin-overview:range',
@@ -289,15 +351,21 @@ export default function AdminOverviewPage() {
   const [chartOpen, setChartOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
-  const [chartLibReady, setChartLibReady] = useState(false);
+  // 图表库状态：按组件实例跟踪，import 成功 / 失败都会落定，不会停在 loading
+  const [chartLibStatus, setChartLibStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [chartLibRetry, setChartLibRetry] = useState(0);
+  // detail 请求的非 abort 失败（按 range 记录，切窗口后不串）
+  const [fullError, setFullError] = useState<{ range: StatsRange; message: string } | null>(null);
+  // 手动重试计数：轻量 / detail 两个请求共用
+  const [retryTick, setRetryTick] = useState(0);
 
   // 轻量数据（按 range 缓存在内存里，切回已加载过的窗口不重复请求）
-  const [light, setLight] = useState<Partial<Record<StatsRange, OverviewStats>>>({});
-  const [full, setFull] = useState<Partial<Record<StatsRange, OverviewStats>>>({});
+  const [light, setLight] = useState<Partial<Record<StatsRange, OverviewStats>>>(() => cachedRange(statsCache.light));
+  const [full, setFull] = useState<Partial<Record<StatsRange, OverviewStats>>>(() => cachedRange(statsCache.full));
   const [loadingLight, setLoadingLight] = useState(true);
   const [loadingFull, setLoadingFull] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [system, setSystem] = useState<SystemOverview | null>(null);
+  const [system, setSystem] = useState<SystemOverview | null>(() => cacheGet(statsCache.system));
 
   // 展开状态记忆
   useEffect(() => {
@@ -306,10 +374,6 @@ export default function AdminOverviewPage() {
     setChartOpen(readStored(LS.chartOpen) === '1');
     setDetailOpen(readStored(LS.detailOpen) === '1');
     setHydrated(true);
-    markChartLibReady = () => setChartLibReady(true);
-    return () => {
-      markChartLibReady = () => {};
-    };
   }, []);
   useEffect(() => {
     if (hydrated) writeStored(LS.range, range);
@@ -321,12 +385,34 @@ export default function AdminOverviewPage() {
     if (hydrated) writeStored(LS.detailOpen, detailOpen ? '1' : '0');
   }, [detailOpen, hydrated]);
 
+  // 图表库：展开走势图后才 import。成功 / 失败都写入本实例的 state；
+  // 重新展开、点重试、页面二次挂载都会重新走这里（import 结果有模块缓存，重复调用无额外网络开销）。
+  useEffect(() => {
+    if (!hydrated || !chartOpen) return;
+    let cancelled = false;
+    loadCharts().then(
+      () => {
+        if (!cancelled) setChartLibStatus('ready');
+      },
+      () => {
+        if (!cancelled) setChartLibStatus('error');
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated, chartOpen, chartLibRetry]);
+
   // 系统基础数（用户/令牌/提供商）
   useEffect(() => {
+    if (system) return;
     const controller = new AbortController();
     fetch('/api/admin/quotas/overview', { signal: controller.signal })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('请求失败'))))
-      .then(setSystem)
+      .then((json) => {
+        statsCache.system = { at: Date.now(), data: json };
+        setSystem(json);
+      })
       .catch((err: any) => {
         if (err?.name !== 'AbortError') console.warn(err);
       });
@@ -337,47 +423,73 @@ export default function AdminOverviewPage() {
   useEffect(() => {
     if (!hydrated) return;
     if (light[range]) return;
+    let cancelled = false;
     const controller = new AbortController();
     setLoadingLight(true);
     fetch(`/api/admin/overview/stats?range=${range}`, { signal: controller.signal, cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('请求失败'))))
       .then((json) => {
+        if (cancelled) return;
+        statsCache.light[range] = { at: Date.now(), data: json };
         setLight((prev) => ({ ...prev, [range]: json }));
         setError(null);
       })
       .catch((err: any) => {
-        if (err?.name !== 'AbortError') setError(err.message || '加载失败');
+        if (!cancelled && err?.name !== 'AbortError') setError(err.message || '加载失败');
       })
-      .finally(() => setLoadingLight(false));
-    return () => controller.abort();
+      // 已被取代（切窗口 / 卸载）的请求不再回写 loading，避免把新请求的 loading 提前关掉
+      .finally(() => {
+        if (!cancelled) setLoadingLight(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range, hydrated]);
+  }, [range, hydrated, retryTick]);
 
   // 点击触发：走势图或完整统计展开时才拉 detail=1
+  // - abort 只发生在 cleanup（切窗口 / 收起 / 卸载）；只要仍 needFull 且该窗口没数据，effect 必然重跑发新请求
+  // - 非 abort 失败记入 fullError：页面给出「重试」，点一下 retryTick+1 重跑，不存在无数据又无错误的死态
   const needFull = hydrated && (chartOpen || detailOpen);
   useEffect(() => {
     if (!needFull || full[range]) return;
+    let cancelled = false;
     const controller = new AbortController();
     setLoadingFull(true);
+    setFullError(null);
     fetch(`/api/admin/overview/stats?range=${range}&detail=1`, { signal: controller.signal, cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('请求失败'))))
       .then((json) => {
+        if (cancelled) return;
+        statsCache.full[range] = { at: Date.now(), data: json };
         setFull((prev) => ({ ...prev, [range]: json }));
         setError(null);
       })
       .catch((err: any) => {
-        if (err?.name !== 'AbortError') setError(err.message || '加载失败');
+        if (cancelled || err?.name === 'AbortError') return;
+        const message = err.message || '加载失败';
+        setFullError({ range, message });
+        setError(message);
       })
-      .finally(() => setLoadingFull(false));
-    return () => controller.abort();
+      .finally(() => {
+        if (!cancelled) setLoadingFull(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range, needFull]);
+  }, [range, needFull, retryTick]);
 
   const fullData = full[range] ?? null;
   const data: OverviewStats | null = fullData ?? light[range] ?? null;
   const initialLoading = loadingLight && !data;
-  // 已请求 detail 但当前窗口还没回来
-  const fullLoading = needFull && !fullData && !error;
+  // 当前窗口 detail 的失败（只在对应 range 下生效）
+  const rangeFullError = fullError?.range === range ? fullError.message : null;
+  // 已请求 detail 但当前窗口还没回来、也没失败
+  const fullLoading = needFull && !fullData && !rangeFullError;
+  const chartLibReady = chartLibStatus === 'ready';
   const trend = fullData?.trend ?? null;
 
   const rangeLabel = RANGE_LABEL[range];
@@ -495,6 +607,13 @@ export default function AdminOverviewPage() {
         <div className="p-4 rounded-lg border border-error/30 bg-error/5 dark:bg-error/10 text-error">
           <i className="fa-solid fa-circle-exclamation mr-2" />
           {error}
+          <button
+            type="button"
+            onClick={() => setRetryTick((n) => n + 1)}
+            className="ml-3 underline decoration-dotted hover:text-primary"
+          >
+            重试
+          </button>
         </div>
       )}
 
@@ -537,7 +656,7 @@ export default function AdminOverviewPage() {
               {rangeLabel}（{rangeHint}）
             </span>
           </CardTitle>
-          {chartOpen && (!trend || !chartLibReady) && (
+          {chartOpen && (!trend || chartLibStatus === 'loading') && !rangeFullError && (
             <span className="inline-flex items-center gap-2 text-xs text-light-text-secondary dark:text-dark-text-secondary">
               <i className="fa-solid fa-spinner fa-spin" />
               加载中…
@@ -561,12 +680,25 @@ export default function AdminOverviewPage() {
           </button>
           {chartOpen && (
             <div className="mt-4 space-y-6">
-              {!trend ? (
+              {rangeFullError ? (
+                <ChartLoadError
+                  message={`走势数据${rangeFullError}`}
+                  onRetry={() => setRetryTick((n) => n + 1)}
+                />
+              ) : !trend ? (
                 <div className="space-y-6">
                   {Array.from({ length: 2 }).map((_, i) => (
                     <div key={i} className="h-[280px] animate-pulse bg-primary/10 rounded" />
                   ))}
                 </div>
+              ) : chartLibStatus === 'error' ? (
+                <ChartLoadError
+                  message="图表组件加载失败"
+                  onRetry={() => setChartLibRetry((n) => n + 1)}
+                  onReload={() => window.location.reload()}
+                />
+              ) : chartLibStatus !== 'ready' ? (
+                <ChartLoadingPlaceholder />
               ) : (
                 <>
                   <div>
