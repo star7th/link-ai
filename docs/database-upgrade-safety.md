@@ -75,8 +75,10 @@
 - **版本17**: 故障转移配置增加熔断状态字段（circuitState、circuitStateSince）
 - **版本18**: 审计日志增加上游URL和响应字段（upstreamUrl、upstreamResponse）
 - **版本19**: 审计日志增加模型字段（model）及索引，用于记录请求使用的模型名称
+- **版本20**: 修复配额快照表缺失的索引（QuotaSnapshot type/refId/period）
+- **版本21**: 审计日志增加流式首字延迟字段（ttftMs）
 
-### 最新版本：19
+### 最新版本：21
 
 ## 升级流程
 
