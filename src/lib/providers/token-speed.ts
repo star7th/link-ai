@@ -1,19 +1,20 @@
 import { prisma } from '@/lib/prisma';
 
 /**
- * 平均 token 速度（tok/s）计算口径：
+ * 出字速度（tok/s，decode 口径）计算口径：
  *   AuditLog 中 logType='request'、responseStatus 为 2xx、completionTokens>0 且 responseTime>0 的记录，
- *   速度 = ΣcompletionTokens ÷ ΣresponseTime(ms) × 1000（累计口径，不是逐请求速度的平均）。
- *   responseTime 为代理记录的请求总耗时（含首 token 等待），流式请求为整段流的总耗时。
- *   无符合条件的记录时返回 null（UI 显示空白）。
+ *   速度 = ΣcompletionTokens ÷ Σ(responseTime − ttftMs)(ms) × 1000（累计口径，不是逐请求速度的平均）。
+ *   decode 口径：分母不含首字等待（TTFT），仅统计 ttftMs 非空且 0 <= ttftMs < responseTime 的流式成功请求；
+ *   ttftMs 缺失或异常的记录只从分母剔除（分子 token 数保留全部成功记录），避免脏数据拉低速度。
+ *   某分组剔除后没有有效样本（decode 分母 <= 0）时返回 null（UI 显示空白）。
  *
  * 统计窗口（两个窗口各自独立计算，各自无数据即 null / 空数组）：
  *   - today：今天，服务器本地时区当日 0 点起
  *   - last30d：最近 30 天
  *
- * 聚合：按 ['providerId', 'model'] groupBy，每个窗口一次查询、覆盖全部传入的 provider，无 N+1。
- *   model 字段为 null 的记录（加字段前的历史数据）计入整体平均值，但不出现在按模型明细中。
- *   model 为请求体里的原始模型名，未做归一化（项目内没有现成的归一化逻辑）。
+ * 聚合：按 ['providerId', 'model'] groupBy，每个窗口两次查询（token 累计 + decode 分母），覆盖全部传入
+ *   的 provider，无逐记录 N+1。model 字段为 null 的记录（加字段前的历史数据）计入整体平均值，
+ *   但不出现在按模型明细中。model 为请求体里的原始模型名，未做归一化。
  */
 
 const LAST_30D_DAYS = 30;
@@ -27,16 +28,16 @@ const SUCCESS_WHERE = {
 
 export interface ModelTokenSpeed {
   model: string;
-  /** 今天平均速度（tok/s），今天无数据为 null */
+  /** 今天出字速度（tok/s，decode 口径），今天无有效样本为 null */
   avgTokenSpeedToday: number | null;
-  /** 最近 30 天平均速度（tok/s），无数据为 null */
+  /** 最近 30 天出字速度（tok/s，decode 口径），无有效样本为 null */
   avgTokenSpeed30d: number | null;
 }
 
 export interface ProviderTokenSpeed {
-  /** 今天整体平均速度（tok/s），无数据为 null */
+  /** 今天整体出字速度（tok/s，decode 口径），无有效样本为 null */
   avgTokenSpeedToday: number | null;
-  /** 最近 30 天整体平均速度（tok/s），无数据为 null */
+  /** 最近 30 天整体出字速度（tok/s，decode 口径），无有效样本为 null */
   avgTokenSpeed30d: number | null;
   /** 按模型明细（两个窗口的并集），按最近 30 天速度降序；两个窗口都无带模型的成功记录时为空数组 */
   modelSpeeds: ModelTokenSpeed[];
@@ -49,10 +50,51 @@ export function startOfToday(): Date {
   return d;
 }
 
-type Acc = Map<string, { tokens: number; ms: number; models: Map<string, { tokens: number; ms: number }> }>;
+type ModelAcc = { tokens: number; decodeMs: number };
+type Acc = Map<string, { tokens: number; decodeMs: number; models: Map<string, ModelAcc> }>;
+
+/** 单条候选 decode 样本（来自成功请求记录的最小字段集） */
+export interface DecodeSample {
+  providerId: string;
+  model?: string | null;
+  responseTime: number;
+  ttftMs: number | null;
+}
+
+/**
+ * 判断一条记录是否参与 decode 分母：
+ * 仅 ttftMs 非空、ttftMs >= 0 且 ttftMs < responseTime 的记录有效（剔除缺失/异常 TTFT 的脏数据）。
+ */
+export function isValidDecodeSample(s: {
+  responseTime: number;
+  ttftMs: number | null;
+}): boolean {
+  return s.ttftMs !== null && s.ttftMs >= 0 && s.ttftMs < s.responseTime;
+}
+
+/** 累计 decode 分母（responseTime − ttftMs）到聚合器（整体 + 按模型） */
+export function accumulateDecodeSamples(samples: DecodeSample[], acc: Acc): void {
+  for (const s of samples) {
+    if (!isValidDecodeSample(s)) continue;
+    const decodeMs = s.responseTime - (s.ttftMs as number);
+    let cur = acc.get(s.providerId);
+    if (!cur) {
+      cur = { tokens: 0, decodeMs: 0, models: new Map() };
+      acc.set(s.providerId, cur);
+    }
+    cur.decodeMs += decodeMs;
+    if (s.model) {
+      const m = cur.models.get(s.model) ?? { tokens: 0, decodeMs: 0 };
+      m.decodeMs += decodeMs;
+      cur.models.set(s.model, m);
+    }
+  }
+}
 
 async function aggregate(providerIds: string[], since: Date): Promise<Acc> {
   const acc: Acc = new Map();
+
+  // 分子：全部成功记录的 completionTokens（decode 口径下 token 数不做剔除）
   const rows = await prisma.auditLog.groupBy({
     by: ['providerId', 'model'],
     where: {
@@ -60,36 +102,56 @@ async function aggregate(providerIds: string[], since: Date): Promise<Acc> {
       providerId: { in: providerIds },
       createdAt: { gte: since },
     },
-    _sum: { completionTokens: true, responseTime: true },
+    _sum: { completionTokens: true },
   });
 
   for (const row of rows) {
     if (!row.providerId) continue;
     const tokens = row._sum.completionTokens ?? 0;
-    const ms = row._sum.responseTime ?? 0;
-    if (tokens <= 0 || ms <= 0) continue;
+    if (tokens <= 0) continue;
     let cur = acc.get(row.providerId);
     if (!cur) {
-      cur = { tokens: 0, ms: 0, models: new Map() };
+      cur = { tokens: 0, decodeMs: 0, models: new Map() };
       acc.set(row.providerId, cur);
     }
     cur.tokens += tokens;
-    cur.ms += ms;
     if (row.model) {
-      const m = cur.models.get(row.model) ?? { tokens: 0, ms: 0 };
+      const m = cur.models.get(row.model) ?? { tokens: 0, decodeMs: 0 };
       m.tokens += tokens;
-      m.ms += ms;
       cur.models.set(row.model, m);
     }
   }
+
+  // 分母：仅 ttftMs 非空且 >= 0 的流式成功记录，逐条在内存里再剔除 ttftMs >= responseTime 的异常值
+  const samples = await prisma.auditLog.findMany({
+    where: {
+      ...SUCCESS_WHERE,
+      providerId: { in: providerIds },
+      createdAt: { gte: since },
+      ttftMs: { not: null, gte: 0 },
+    },
+    select: { providerId: true, model: true, responseTime: true, ttftMs: true },
+  });
+
+  accumulateDecodeSamples(
+    samples.map((s) => ({
+      providerId: s.providerId as string,
+      model: s.model,
+      responseTime: s.responseTime,
+      ttftMs: s.ttftMs,
+    })),
+    acc
+  );
+
   return acc;
 }
 
-const tokPerSec = (tokens: number, ms: number): number | null =>
-  tokens > 0 && ms > 0 ? (tokens / ms) * 1000 : null;
+/** decode 口径速度：tokens>0 且 decodeMs>0 才有效，否则 null（无有效样本） */
+const tokPerSec = (tokens: number, decodeMs: number): number | null =>
+  tokens > 0 && decodeMs > 0 ? (tokens / decodeMs) * 1000 : null;
 
 /**
- * 按 ['providerId', 'model'] 聚合查询，同时计算「今天」和「最近 30 天」两个窗口。
+ * 按 ['providerId', 'model'] 聚合查询，同时计算「今天」和「最近 30 天」两个窗口（decode 口径）。
  * 无数据的 provider 不会出现在结果中（由调用方按需补 null / []）。
  */
 export async function getProviderTokenSpeeds(
@@ -113,10 +175,10 @@ export async function getProviderTokenSpeeds(
     for (const model of modelNames) {
       const tm = t?.models.get(model);
       const lm = l?.models.get(model);
-      const speed30d = lm ? tokPerSec(lm.tokens, lm.ms) : null;
+      const speed30d = lm ? tokPerSec(lm.tokens, lm.decodeMs) : null;
       modelSpeeds.push({
         model,
-        avgTokenSpeedToday: tm ? tokPerSec(tm.tokens, tm.ms) : null,
+        avgTokenSpeedToday: tm ? tokPerSec(tm.tokens, tm.decodeMs) : null,
         avgTokenSpeed30d: speed30d,
       });
     }
@@ -127,8 +189,8 @@ export async function getProviderTokenSpeeds(
         (b.avgTokenSpeedToday ?? -1) - (a.avgTokenSpeedToday ?? -1)
     );
     result.set(providerId, {
-      avgTokenSpeedToday: t ? tokPerSec(t.tokens, t.ms) : null,
-      avgTokenSpeed30d: l ? tokPerSec(l.tokens, l.ms) : null,
+      avgTokenSpeedToday: t ? tokPerSec(t.tokens, t.decodeMs) : null,
+      avgTokenSpeed30d: l ? tokPerSec(l.tokens, l.decodeMs) : null,
       modelSpeeds,
     });
   }

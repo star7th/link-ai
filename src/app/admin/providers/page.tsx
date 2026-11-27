@@ -22,11 +22,11 @@ interface Provider {
   modelRedirect: string | null;
   timeoutMs: number | null;
   streamTimeoutMs: number | null;
-  /** 今天的平均 token 速度（tok/s），无数据为 null */
+  /** 今天的出字速度（tok/s，decode 口径：不含首字等待，仅统计流式请求），无有效样本为 null */
   avgTokenSpeedToday: number | null;
-  /** 最近 30 天的平均 token 速度（tok/s），无数据为 null */
+  /** 最近 30 天的出字速度（tok/s，decode 口径），无有效样本为 null */
   avgTokenSpeed30d: number | null;
-  /** 按模型平均速度明细（今天 / 最近 30 天），无数据为空数组 */
+  /** 按模型出字速度明细（今天 / 最近 30 天），无数据为空数组 */
   modelSpeeds: Array<{
     model: string;
     avgTokenSpeedToday: number | null;
@@ -886,7 +886,7 @@ export default function AdminProvidersPage() {
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell">协议类型</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell">API地址</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground">健康状态</th>
-                  <th className="text-left py-3 px-4 font-medium text-muted-foreground">平均 token 速度</th>
+                  <th className="text-left py-3 px-4 font-medium text-muted-foreground" title="decode 口径，不含首字等待，仅统计流式请求">出字速度</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell">RPM限制</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground">状态</th>
                   <th className="text-right py-3 px-4 font-medium text-muted-foreground">操作</th>
@@ -995,7 +995,7 @@ export default function AdminProvidersPage() {
                       <tr className="border-b border-primary/10 bg-primary/5">
                         <td colSpan={9} className="px-4 py-3">
                           <div className="text-xs font-medium text-muted-foreground mb-2">
-                            按模型平均 token 速度（今日 / 最近 30 天，按 30 日速度降序）
+                            按模型出字速度（decode 口径，今日 / 最近 30 天，按 30 日速度降序）
                           </div>
                           {provider.modelSpeeds.length === 0 ? (
                             <div className="text-sm text-muted-foreground">暂无数据</div>
