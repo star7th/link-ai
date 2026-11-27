@@ -13,6 +13,7 @@ type AuditLogEntry = {
   requestBodyHash?: string;
   responseStatus?: number;
   responseTime?: number;
+  ttftMs?: number;
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
@@ -110,6 +111,7 @@ class AuditLogger {
           requestBodyHash: e.requestBodyHash,
           responseStatus: e.responseStatus,
           responseTime: e.responseTime,
+          ttftMs: e.ttftMs,
           promptTokens: e.promptTokens,
           completionTokens: e.completionTokens,
           totalTokens: e.totalTokens,
