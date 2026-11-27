@@ -1,4 +1,4 @@
-import { prisma } from '@/lib/prisma';
+import { Prisma, prisma } from '@/lib/prisma';
 
 /**
  * 出字速度（tok/s，decode 口径）计算口径：
@@ -19,12 +19,8 @@ import { prisma } from '@/lib/prisma';
 
 const LAST_30D_DAYS = 30;
 
-const SUCCESS_WHERE = {
-  logType: 'request',
-  responseStatus: { gte: 200, lt: 300 },
-  completionTokens: { gt: 0 },
-  responseTime: { gt: 0 },
-} as const;
+/** 服务端内存缓存 TTL */
+const CACHE_TTL_MS = 45_000;
 
 export interface ModelTokenSpeed {
   model: string;
@@ -91,57 +87,59 @@ export function accumulateDecodeSamples(samples: DecodeSample[], acc: Acc): void
   }
 }
 
+/** raw SQL 聚合行：分子（全部成功 token）与分母（有效 decode 毫秒）一次 GROUP BY 取回 */
+interface AggregateRow {
+  providerId: string | null;
+  model: string | null;
+  tokens: number | bigint | null;
+  decodeMs: number | bigint | null;
+}
+
 async function aggregate(providerIds: string[], since: Date): Promise<Acc> {
   const acc: Acc = new Map();
 
-  // 分子：全部成功记录的 completionTokens（decode 口径下 token 数不做剔除）
-  const rows = await prisma.auditLog.groupBy({
-    by: ['providerId', 'model'],
-    where: {
-      ...SUCCESS_WHERE,
-      providerId: { in: providerIds },
-      createdAt: { gte: since },
-    },
-    _sum: { completionTokens: true },
-  });
+  // 一次 GROUP BY 同时取回：
+  //   分子：全部成功记录的 completionTokens（decode 口径下 token 数不做剔除）
+  //   分母：仅 ttftMs 非空且 0 <= ttftMs < responseTime 的有效流式样本的 (responseTime − ttftMs)
+  // createdAt 在 SQLite 中是 UTC 毫秒整数，参数用 CAST 传入。
+  const rows = await prisma.$queryRaw<AggregateRow[]>`
+    SELECT
+      providerId,
+      model,
+      CAST(COALESCE(SUM(completionTokens), 0) AS INTEGER) AS tokens,
+      CAST(COALESCE(SUM(CASE
+        WHEN ttftMs IS NOT NULL AND ttftMs >= 0 AND ttftMs < responseTime
+        THEN responseTime - ttftMs
+        ELSE 0
+      END), 0) AS INTEGER) AS decodeMs
+    FROM AuditLog
+    WHERE logType = 'request'
+      AND responseStatus >= 200 AND responseStatus < 300
+      AND completionTokens > 0 AND responseTime > 0
+      AND providerId IN (${Prisma.join(providerIds)})
+      AND createdAt >= CAST(${since.getTime()} AS INTEGER)
+    GROUP BY providerId, model
+  `;
 
   for (const row of rows) {
     if (!row.providerId) continue;
-    const tokens = row._sum.completionTokens ?? 0;
-    if (tokens <= 0) continue;
+    const tokens = Number(row.tokens ?? 0);
+    const decodeMs = Number(row.decodeMs ?? 0);
+    if (tokens <= 0 && decodeMs <= 0) continue;
     let cur = acc.get(row.providerId);
     if (!cur) {
       cur = { tokens: 0, decodeMs: 0, models: new Map() };
       acc.set(row.providerId, cur);
     }
     cur.tokens += tokens;
+    cur.decodeMs += decodeMs;
     if (row.model) {
       const m = cur.models.get(row.model) ?? { tokens: 0, decodeMs: 0 };
       m.tokens += tokens;
+      m.decodeMs += decodeMs;
       cur.models.set(row.model, m);
     }
   }
-
-  // 分母：仅 ttftMs 非空且 >= 0 的流式成功记录，逐条在内存里再剔除 ttftMs >= responseTime 的异常值
-  const samples = await prisma.auditLog.findMany({
-    where: {
-      ...SUCCESS_WHERE,
-      providerId: { in: providerIds },
-      createdAt: { gte: since },
-      ttftMs: { not: null, gte: 0 },
-    },
-    select: { providerId: true, model: true, responseTime: true, ttftMs: true },
-  });
-
-  accumulateDecodeSamples(
-    samples.map((s) => ({
-      providerId: s.providerId as string,
-      model: s.model,
-      responseTime: s.responseTime,
-      ttftMs: s.ttftMs,
-    })),
-    acc
-  );
 
   return acc;
 }
@@ -157,9 +155,12 @@ const tokPerSec = (tokens: number, decodeMs: number): number | null =>
 export async function getProviderTokenSpeeds(
   providerIds: string[]
 ): Promise<Map<string, ProviderTokenSpeed>> {
-  const result = new Map<string, ProviderTokenSpeed>();
-  if (providerIds.length === 0) return result;
+  if (providerIds.length === 0) return new Map<string, ProviderTokenSpeed>();
+  return cachedGetSpeeds(providerIds);
+}
 
+async function computeSpeeds(providerIds: string[]): Promise<Map<string, ProviderTokenSpeed>> {
+  const result = new Map<string, ProviderTokenSpeed>();
   const now = Date.now();
   const [today, last30d] = await Promise.all([
     aggregate(providerIds, startOfToday()),
@@ -195,6 +196,30 @@ export async function getProviderTokenSpeeds(
     });
   }
   return result;
+}
+
+// ---- 服务端内存缓存（按排序后的 providerIds 做 key，TTL 45 秒，失败时删除缓存条目再抛错） ----
+
+type SpeedCacheMap = Map<
+  string,
+  { expiresAt: number; promise: Promise<Map<string, ProviderTokenSpeed>> }
+>;
+const g = globalThis as unknown as { __providerTokenSpeedCache?: SpeedCacheMap };
+const speedCache: SpeedCacheMap = (g.__providerTokenSpeedCache ??= new Map());
+
+function cachedGetSpeeds(providerIds: string[]): Promise<Map<string, ProviderTokenSpeed>> {
+  const key = [...providerIds].sort().join(',');
+  const hit = speedCache.get(key);
+  if (hit && hit.expiresAt > Date.now()) return hit.promise;
+  const entry = {
+    expiresAt: Date.now() + CACHE_TTL_MS,
+    promise: computeSpeeds(providerIds).catch((err) => {
+      speedCache.delete(key);
+      throw err;
+    }),
+  };
+  speedCache.set(key, entry);
+  return entry.promise;
 }
 
 /** 格式化为 "123.4"；null/非有限值返回空字符串。 */
