@@ -103,6 +103,13 @@ function serializeModelRedirect(rules: ModelRedirectRule[]): string | null {
   return filtered.length > 0 ? JSON.stringify(filtered) : null;
 }
 
+const HEALTH_LABELS: Record<string, string> = {
+  healthy: "健康",
+  degraded: "降级",
+  down: "故障",
+  unknown: "未知",
+};
+
 function HealthBadge({ status }: { status: string }) {
   const config: Record<string, { bg: string; text: string; label: string }> = {
     healthy: {
@@ -134,6 +141,27 @@ function HealthBadge({ status }: { status: string }) {
       {c.label}
     </span>
   );
+}
+
+/** 紧凑出字速度：「3625 / 66890」（左今日、右 30 日，tok/s 取整）；无数据的一侧显示 "-" */
+function formatTokenSpeedCompact(
+  today: number | null | undefined,
+  last30d: number | null | undefined
+): string {
+  const fmt = (v: number | null | undefined) =>
+    v === null || v === undefined || !Number.isFinite(v) || v <= 0 ? "-" : Math.round(v).toString();
+  return `${fmt(today)} / ${fmt(last30d)}`;
+}
+
+/** API 地址紧凑显示：取 host(含端口) + 首段路径，其余省略；解析失败时回退原文截断 */
+function compactApiUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const firstPath = u.pathname.split("/").filter(Boolean)[0];
+    return firstPath ? `${u.host}/${firstPath}…` : u.host;
+  } catch {
+    return url.length > 32 ? `${url.slice(0, 32)}…` : url;
+  }
 }
 
 function TestResultModal({
@@ -881,27 +909,31 @@ export default function AdminProvidersPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-primary/15">
-                  <th className="text-left py-3 px-4 font-medium text-muted-foreground">名称</th>
-                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell">代码</th>
-                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell">协议类型</th>
-                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell">API地址</th>
-                  <th className="text-left py-3 px-4 font-medium text-muted-foreground">健康状态</th>
-                  <th className="text-left py-3 px-4 font-medium text-muted-foreground" title="decode 口径，不含首字等待，仅统计流式请求">出字速度</th>
-                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell">RPM限制</th>
-                  <th className="text-left py-3 px-4 font-medium text-muted-foreground">状态</th>
-                  <th className="text-right py-3 px-4 font-medium text-muted-foreground">操作</th>
+                  <th className="text-left py-3 px-4 font-medium text-muted-foreground w-44 min-w-[11rem]">名称</th>
+                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell whitespace-nowrap">代码</th>
+                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell whitespace-nowrap">协议类型</th>
+                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell w-56 min-w-[10rem] max-w-[16rem]">API地址</th>
+                  <th className="text-left py-3 px-4 font-medium text-muted-foreground whitespace-nowrap">状态</th>
+                  <th
+                    className="text-left py-3 px-4 font-medium text-muted-foreground whitespace-nowrap"
+                    title="左：今日 / 右：最近 30 天，单位 tok/s。decode 口径：不含首字等待，仅统计流式请求"
+                  >
+                    出字速度 <span className="text-xs font-normal">（今日 / 30日）</span>
+                  </th>
+                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell whitespace-nowrap">RPM限制</th>
+                  <th className="text-right py-3 px-4 font-medium text-muted-foreground whitespace-nowrap">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={9} className="text-center py-8 text-muted-foreground">
+                    <td colSpan={8} className="text-center py-8 text-muted-foreground">
                       加载中...
                     </td>
                   </tr>
                 ) : providers.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="text-center py-8 text-muted-foreground">
+                    <td colSpan={8} className="text-center py-8 text-muted-foreground">
                       暂无提供商数据
                     </td>
                   </tr>
@@ -911,9 +943,12 @@ export default function AdminProvidersPage() {
                     <tr
                       className="border-b border-primary/10 hover:bg-primary/5 transition-colors"
                     >
-                      <td className="py-3 px-4 font-medium">{provider.name}</td>
+                      <td className="py-3 px-4 font-medium w-44 min-w-[11rem] break-words">{provider.name}</td>
                       <td className="py-3 px-4 hidden md:table-cell">
-                        <code className="text-xs bg-primary/10 dark:bg-primary/15 px-1.5 py-0.5 rounded">
+                        <code
+                          className="text-xs bg-primary/10 dark:bg-primary/15 px-1.5 py-0.5 rounded break-all"
+                          title={provider.code}
+                        >
                           {provider.code}
                         </code>
                       </td>
@@ -922,15 +957,30 @@ export default function AdminProvidersPage() {
                           {protocolLabel(provider.protocolType)}
                         </span>
                       </td>
-                      <td className="py-3 px-4 hidden md:table-cell">
-                        <span className="text-xs break-all">{provider.apiBaseUrl}</span>
+                      <td className="py-3 px-4 hidden md:table-cell w-56 min-w-[10rem] max-w-[16rem]">
+                        <span className="text-xs block truncate" title={provider.apiBaseUrl}>
+                          {compactApiUrl(provider.apiBaseUrl)}
+                        </span>
                       </td>
-                      <td className="py-3 px-4">
-                        <HealthBadge status={provider.healthStatus} />
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        <span
+                          className="inline-flex items-center gap-1.5"
+                          title={`健康状态：${HEALTH_LABELS[provider.healthStatus] ?? "未知"} · 启用状态：${provider.status === "active" ? "正常" : "已禁用"}`}
+                        >
+                          <HealthBadge status={provider.healthStatus} />
+                          {provider.status !== "active" && (
+                            <span className="text-xs text-error dark:text-error">已禁用</span>
+                          )}
+                        </span>
                       </td>
                       <td className="py-3 px-4 tabular-nums whitespace-nowrap">
                         <span className="inline-flex items-center gap-1">
-                          {formatTokenSpeed(provider.avgTokenSpeedToday, provider.avgTokenSpeed30d)}
+                          <span
+                            className="text-xs"
+                            title={`${formatTokenSpeed(provider.avgTokenSpeedToday, provider.avgTokenSpeed30d) || "暂无数据"}（decode 口径：不含首字等待，仅统计流式请求）`}
+                          >
+                            {formatTokenSpeedCompact(provider.avgTokenSpeedToday, provider.avgTokenSpeed30d)}
+                          </span>
                           {provider.modelSpeeds.length > 0 && (
                             <Button
                               variant="ghost"
@@ -950,29 +1000,20 @@ export default function AdminProvidersPage() {
                         {provider.totalRpmLimit ?? "-"}
                       </td>
                       <td className="py-3 px-4">
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                            provider.status === "active"
-                              ? "bg-success/10 text-success dark:bg-success/15 dark:text-success"
-                              : "bg-error/10 text-error dark:bg-error/15 dark:text-error"
-                          }`}
-                        >
-                          {provider.status === "active" ? "正常" : "已禁用"}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center justify-end gap-1">
+                        <div className="flex items-center justify-end gap-1 whitespace-nowrap">
                           <Button
                             variant="ghost"
                             size="sm"
+                            title="测试连接"
                             disabled={testingId === provider.id}
                             onClick={() => handleTest(provider)}
                           >
-                            {testingId === provider.id ? "测试中" : "测试连接"}
+                            {testingId === provider.id ? "测试中" : "测试"}
                           </Button>
                           <Button
                             variant="ghost"
                             size="sm"
+                            title="编辑"
                             onClick={() => {
                               setEditingProvider(provider);
                               setShowEditModal(true);
@@ -983,6 +1024,7 @@ export default function AdminProvidersPage() {
                           <Button
                             variant="ghost"
                             size="sm"
+                            title="删除"
                             className="text-error hover:text-error"
                             onClick={() => handleDelete(provider)}
                           >
@@ -993,9 +1035,9 @@ export default function AdminProvidersPage() {
                     </tr>
                     {expandedSpeedId === provider.id && (
                       <tr className="border-b border-primary/10 bg-primary/5">
-                        <td colSpan={9} className="px-4 py-3">
+                        <td colSpan={8} className="px-4 py-3">
                           <div className="text-xs font-medium text-muted-foreground mb-2">
-                            按模型出字速度（decode 口径，今日 / 最近 30 天，按 30 日速度降序）
+                            按模型出字速度（左今日 / 右最近 30 天，单位 tok/s，"-" 为无数据；decode 口径，按 30 日速度降序）
                           </div>
                           {provider.modelSpeeds.length === 0 ? (
                             <div className="text-sm text-muted-foreground">暂无数据</div>
@@ -1007,7 +1049,7 @@ export default function AdminProvidersPage() {
                                   className="inline-flex items-center gap-2 rounded-md border border-primary/15 bg-background px-2.5 py-1 text-xs"
                                 >
                                   <code>{m.model}</code>
-                                  <span className="tabular-nums">{formatTokenSpeed(m.avgTokenSpeedToday, m.avgTokenSpeed30d)}</span>
+                                  <span className="tabular-nums whitespace-nowrap" title="今日 / 最近 30 天">{formatTokenSpeedCompact(m.avgTokenSpeedToday, m.avgTokenSpeed30d)}</span>
                                 </span>
                               ))}
                             </div>
