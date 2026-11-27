@@ -673,6 +673,18 @@ const DB_VERSIONS = [
         await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "QuotaSnapshot_refId_idx" ON "QuotaSnapshot"("refId");`);
       }
     }
+  },
+  {
+    version: 21,
+    name: '审计日志增加 TTFT 字段',
+    check: async () => {
+      return await hasColumn('AuditLog', 'ttftMs');
+    },
+    upgrade: async () => {
+      if (!await hasColumn('AuditLog', 'ttftMs')) {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" ADD COLUMN "ttftMs" INTEGER;`);
+      }
+    }
   }
 ];
 

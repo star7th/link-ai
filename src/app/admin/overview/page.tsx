@@ -678,6 +678,14 @@ export default function AdminOverviewPage() {
               </span>
             )}
           </button>
+          {!chartOpen && (
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-light-text-secondary dark:text-dark-text-secondary">
+              <span className="font-medium">性能明细</span>
+              <span>TTFT P50：{formatMs(data?.ttft?.p50)}</span>
+              <span>P95：{formatMs(data?.ttft?.p95)}</span>
+              <span>平均：{formatMs(data?.ttft?.avg)}</span>
+            </div>
+          )}
           {chartOpen && (
             <div className="mt-4 space-y-6">
               {rangeFullError ? (

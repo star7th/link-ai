@@ -487,7 +487,11 @@ async function handleRequest(
         clearTimeout(timer);
 
         if (upstream.ok && upstream.body) {
-          const buffered = await bufferUpstreamStream(upstream);
+          let ttftMs: number | undefined;
+          const buffered = await bufferUpstreamStream(upstream, {
+            startTime,
+            onFirstData: (t) => { ttftMs = t; },
+          });
 
           if (!buffered) {
             failedProviderIds.push(provider.id);
@@ -544,6 +548,7 @@ async function handleRequest(
                     requestMethod: method,
                     responseStatus: upstream.status,
                     responseTime: Date.now() - startTime,
+                    ttftMs,
                     promptTokens: usage.promptTokens,
                     completionTokens: usage.completionTokens,
                     totalTokens: usage.totalTokens,

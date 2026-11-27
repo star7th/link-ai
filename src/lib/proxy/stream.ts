@@ -122,8 +122,16 @@ function countSseDataChunks(text: string): number {
  * Returns `null` when the upstream errors during buffering.
  * Otherwise returns a `{ stream, bufferedChunks, fullText }` object.
  */
+export interface BufferUpstreamOptions {
+  /** 请求开始时间（Date.now()），用于计算 TTFT；缺省时以进入本函数时刻为起点 */
+  startTime?: number;
+  /** 首块上游数据到达时回调，参数为 TTFT 毫秒数（仅回调一次） */
+  onFirstData?: (ttftMs: number) => void;
+}
+
 export async function bufferUpstreamStream(
   upstreamResponse: Response,
+  opts?: BufferUpstreamOptions
 ): Promise<{
     stream: ReadableStream<Uint8Array>;
     bufferedChunks: Uint8Array[];
@@ -132,6 +140,8 @@ export async function bufferUpstreamStream(
   const reader = upstreamResponse.body?.getReader();
   if (!reader) return null;
 
+  const startedAt = opts?.startTime ?? Date.now();
+  let firstDataReported = false;
   const bufferMs = parseInt(process.env.PROXY_STREAM_BUFFER_MS || '1000', 10);
   const minChunks = parseInt(process.env.PROXY_STREAM_MIN_CHUNKS || '2', 10);
   const decoder = new TextDecoder();
@@ -178,6 +188,12 @@ export async function bufferUpstreamStream(
         bufferedChunks.push(value);
         bufferedText += decoder.decode(value, { stream: true });
         chunkCount++;
+        if (!firstDataReported) {
+          firstDataReported = true;
+          try {
+            opts?.onFirstData?.(Date.now() - startedAt);
+          } catch (_) {}
+        }
         trySettle();
       }
     } catch (err) {

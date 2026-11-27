@@ -574,7 +574,11 @@ async function handleRequest(
           }
 
           if (upstream.ok && upstream.body) {
-            const buffered = await bufferUpstreamStream(upstream);
+            let ttftMs: number | undefined;
+            const buffered = await bufferUpstreamStream(upstream, {
+              startTime,
+              onFirstData: (t) => { ttftMs = t; },
+            });
 
             if (!buffered) {
               circuitBreaker.recordFailure(tp.provider.id, tp.provider.name);
@@ -615,6 +619,7 @@ async function handleRequest(
                       requestMethod: method,
                       responseStatus: upstream.status,
                       responseTime: Date.now() - startTime,
+                      ttftMs,
                       promptTokens: usage.promptTokens,
                       completionTokens: usage.completionTokens,
                       totalTokens: usage.totalTokens,
@@ -785,7 +790,11 @@ async function handleRequest(
 
           if (upstream.ok && upstream.body) {
             // Buffer initial stream data to detect early failures
-            const buffered = await bufferUpstreamStream(upstream);
+            let ttftMs: number | undefined;
+            const buffered = await bufferUpstreamStream(upstream, {
+              startTime,
+              onFirstData: (t) => { ttftMs = t; },
+            });
 
             if (!buffered) {
               failedProviderIds.push(tp.provider.id);
@@ -847,6 +856,7 @@ async function handleRequest(
                       requestMethod: method,
                       responseStatus: upstream.status,
                       responseTime: Date.now() - startTime,
+                      ttftMs,
                       promptTokens: usage.promptTokens,
                       completionTokens: usage.completionTokens,
                       totalTokens: usage.totalTokens,

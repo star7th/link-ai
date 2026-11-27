@@ -290,6 +290,33 @@ async function queryDimCounts(a: number, b: number): Promise<{ models: number; p
   return { models: rows[0]?.models ?? 0, providers: rows[0]?.providers ?? 0 };
 }
 
+/** 流式首字延迟（TTFT）统计：样本来自 ttftMs 非空的记录 */
+export interface TtftStats {
+  p50: number | null;
+  p95: number | null;
+  avg: number | null;
+}
+
+/** 纯函数：由 TTFT 样本（毫秒）汇总 P50 / P95 / 平均值；空样本返回三个 null */
+export function summarizeTtft(samples: number[]): TtftStats {
+  if (!samples.length) return { p50: null, p95: null, avg: null };
+  const sum = samples.reduce((acc, v) => acc + v, 0);
+  return {
+    p50: percentile(samples, 50),
+    p95: percentile(samples, 95),
+    avg: sum / samples.length,
+  };
+}
+
+async function queryTtftSamples(a: number, b: number): Promise<number[]> {
+  const rows = await prisma.$queryRaw<Array<{ ttft: number }>>`
+    SELECT CAST(ttftMs AS REAL) AS ttft
+    FROM AuditLog
+    WHERE ${baseWhere(a, b)} AND ttftMs IS NOT NULL
+  `;
+  return rows.map((r) => r.ttft);
+}
+
 function ratio(num: number, den: number): number | null {
   return den > 0 ? num / den : null;
 }
@@ -338,6 +365,8 @@ export interface OverviewStats {
   providerCount: number;
   summary: StatsSummary;
   prevSummary: StatsSummary;
+  /** 流式 TTFT 统计（样本来自 ttftMs 非空记录；无样本时三个值均为 null） */
+  ttft: TtftStats;
   /** 轻量模式（detail=false）下为 null；分布明细里各分组的 P95 同样仅 detail=true 有值 */
   trend: StatsTrendPoint[] | null;
   byModel: StatsBreakdownItem[];
@@ -441,10 +470,11 @@ export async function getOverviewStats(range: StatsRange, detail: boolean, now =
   const dimLimit = detail ? 1000 : 3;
 
   // Top 列表（一次 groupBy，批量取名）+ 维度不重复数
-  const [byUser, byToken, dimCounts] = await Promise.all([
+  const [byUser, byToken, dimCounts, ttftSamples] = await Promise.all([
     queryNamed('userId', w.start, w.end, 10),
     queryNamed('tokenId', w.start, w.end, 10),
     queryDimCounts(w.start, w.end),
+    queryTtftSamples(w.start, w.end),
   ]);
 
   // 按模型 / 按 providerId 分组；延迟样本只需单列，轻量模式也算 P95（卡片跟随窗口）
@@ -498,6 +528,7 @@ export async function getOverviewStats(range: StatsRange, detail: boolean, now =
     providerCount: dimCounts.providers,
     summary: finalizeSummary(curRaw, allSamples, true),
     prevSummary: finalizeSummary(prevRaw, prevLatency.map((s) => s.responseTime), true),
+    ttft: summarizeTtft(ttftSamples),
     trend: trendRows ? buildTrend(w, trendRows) : null,
     byModel: toBreakdown(modelRows, dimTotal, modelSamples, detail),
     byProvider: toBreakdown(providerRowsNamed, dimTotal, providerSamplesNamed, detail),
