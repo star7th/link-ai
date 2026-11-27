@@ -910,7 +910,7 @@ export default function AdminProvidersPage() {
               <thead>
                 <tr className="border-b border-primary/15">
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground w-44 min-w-[11rem]">名称</th>
-                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell whitespace-nowrap w-40 min-w-[9rem] max-w-[12rem]">代码</th>
+                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell whitespace-nowrap w-44 min-w-[10rem] max-w-[14rem]">代码</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell whitespace-nowrap">协议类型</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell w-48 min-w-[8rem] max-w-[14rem]">API地址</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground whitespace-nowrap">状态</th>
@@ -944,9 +944,9 @@ export default function AdminProvidersPage() {
                       className="border-b border-primary/10 hover:bg-primary/5 transition-colors"
                     >
                       <td className="py-3 px-4 font-medium w-44 min-w-[11rem] break-words">{provider.name}</td>
-                      <td className="py-3 px-4 hidden md:table-cell w-40 min-w-[9rem] max-w-[12rem]">
+                      <td className="py-3 px-4 hidden md:table-cell w-44 min-w-[10rem] max-w-[14rem]">
                         <code
-                          className="text-xs bg-primary/10 dark:bg-primary/15 px-1.5 py-0.5 rounded block truncate whitespace-nowrap"
+                          className="text-xs bg-primary/10 dark:bg-primary/15 px-1.5 py-0.5 rounded block whitespace-nowrap overflow-visible"
                           title={provider.code}
                         >
                           {provider.code}
