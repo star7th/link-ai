@@ -910,9 +910,9 @@ export default function AdminProvidersPage() {
               <thead>
                 <tr className="border-b border-primary/15">
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground w-44 min-w-[11rem]">名称</th>
-                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell whitespace-nowrap">代码</th>
+                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell whitespace-nowrap w-40 min-w-[9rem] max-w-[12rem]">代码</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell whitespace-nowrap">协议类型</th>
-                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell w-56 min-w-[10rem] max-w-[16rem]">API地址</th>
+                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden md:table-cell w-48 min-w-[8rem] max-w-[14rem]">API地址</th>
                   <th className="text-left py-3 px-4 font-medium text-muted-foreground whitespace-nowrap">状态</th>
                   <th
                     className="text-left py-3 px-4 font-medium text-muted-foreground whitespace-nowrap"
@@ -920,7 +920,7 @@ export default function AdminProvidersPage() {
                   >
                     出字速度 <span className="text-xs font-normal">（今日 / 30日）</span>
                   </th>
-                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell whitespace-nowrap">RPM限制</th>
+                  <th className="text-left py-3 px-4 font-medium text-muted-foreground hidden lg:table-cell whitespace-nowrap">RPM</th>
                   <th className="text-right py-3 px-4 font-medium text-muted-foreground whitespace-nowrap">操作</th>
                 </tr>
               </thead>
@@ -944,9 +944,9 @@ export default function AdminProvidersPage() {
                       className="border-b border-primary/10 hover:bg-primary/5 transition-colors"
                     >
                       <td className="py-3 px-4 font-medium w-44 min-w-[11rem] break-words">{provider.name}</td>
-                      <td className="py-3 px-4 hidden md:table-cell">
+                      <td className="py-3 px-4 hidden md:table-cell w-40 min-w-[9rem] max-w-[12rem]">
                         <code
-                          className="text-xs bg-primary/10 dark:bg-primary/15 px-1.5 py-0.5 rounded break-all"
+                          className="text-xs bg-primary/10 dark:bg-primary/15 px-1.5 py-0.5 rounded block truncate whitespace-nowrap"
                           title={provider.code}
                         >
                           {provider.code}
@@ -957,7 +957,7 @@ export default function AdminProvidersPage() {
                           {protocolLabel(provider.protocolType)}
                         </span>
                       </td>
-                      <td className="py-3 px-4 hidden md:table-cell w-56 min-w-[10rem] max-w-[16rem]">
+                      <td className="py-3 px-4 hidden md:table-cell w-48 min-w-[8rem] max-w-[14rem]">
                         <span className="text-xs block truncate" title={provider.apiBaseUrl}>
                           {compactApiUrl(provider.apiBaseUrl)}
                         </span>
