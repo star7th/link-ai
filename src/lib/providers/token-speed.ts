@@ -5,8 +5,8 @@ import { prisma } from '@/lib/prisma';
  * 出字速度（tok/s，decode 口径）计算口径：
  *   AuditLog 中 logType='request'、responseStatus 为 2xx、completionTokens>0 且 responseTime>0 的记录，
  *   速度 = ΣcompletionTokens ÷ Σ(responseTime − ttftMs)(ms) × 1000（累计口径，不是逐请求速度的平均）。
- *   decode 口径：分母不含首字等待（TTFT），仅统计 ttftMs 非空且 0 <= ttftMs < responseTime 的流式成功请求；
- *   ttftMs 缺失或异常的记录只从分母剔除（分子 token 数保留全部成功记录），避免脏数据拉低速度。
+ *   decode 口径：分子分母同源配对，仅统计 ttftMs 非空且 0 <= ttftMs < responseTime 的流式成功请求；
+ *   ttftMs 缺失或异常的记录整体剔除（分子分母都不计），避免口径错配导致速度虚高。
  *   某分组剔除后没有有效样本（decode 分母 <= 0）时返回 null（UI 显示空白）。
  *
  * 统计窗口（两个窗口各自独立计算，各自无数据即 null / 空数组）：
@@ -99,24 +99,21 @@ interface AggregateRow {
 async function aggregate(providerIds: string[], since: Date): Promise<Acc> {
   const acc: Acc = new Map();
 
-  // 一次 GROUP BY 同时取回：
-  //   分子：全部成功记录的 completionTokens（decode 口径下 token 数不做剔除）
-  //   分母：仅 ttftMs 非空且 0 <= ttftMs < responseTime 的有效流式样本的 (responseTime − ttftMs)
+  // 一次 GROUP BY 同时取回（分子分母同源：全部限定在 ttftMs 有效的记录上）：
+  //   分子：SUM(completionTokens)
+  //   分母：SUM(responseTime − ttftMs)
   // createdAt 在 SQLite 中是 UTC 毫秒整数，参数用 CAST 传入。
   const rows = await prisma.$queryRaw<AggregateRow[]>`
     SELECT
       providerId,
       model,
       CAST(COALESCE(SUM(completionTokens), 0) AS INTEGER) AS tokens,
-      CAST(COALESCE(SUM(CASE
-        WHEN ttftMs IS NOT NULL AND ttftMs >= 0 AND ttftMs < responseTime
-        THEN responseTime - ttftMs
-        ELSE 0
-      END), 0) AS INTEGER) AS decodeMs
+      CAST(COALESCE(SUM(responseTime - ttftMs), 0) AS INTEGER) AS decodeMs
     FROM AuditLog
     WHERE logType = 'request'
       AND responseStatus >= 200 AND responseStatus < 300
       AND completionTokens > 0 AND responseTime > 0
+      AND ttftMs IS NOT NULL AND ttftMs >= 0 AND ttftMs < responseTime
       AND providerId IN (${Prisma.join(providerIds)})
       AND createdAt >= CAST(${since.getTime()} AS INTEGER)
     GROUP BY providerId, model
