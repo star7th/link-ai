@@ -1,4 +1,5 @@
-import { Prisma, prisma } from '@/lib/prisma';
+import { Prisma } from '@prisma/client';
+import { prisma } from '@/lib/prisma';
 
 /**
  * 出字速度（tok/s，decode 口径）计算口径：
